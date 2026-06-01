@@ -1,0 +1,19 @@
+{
+  "name": "danilov-method",
+  "version": "1.0.0",
+  "description": "Metodo Danilov per Claude Code: prompt strutturati INDICE/DEFINIZIONI/RELAZIONI in notazione numerica compatta, ed esecuzione DanilovGoal tracciata a bit one-hot con Trace firmata HMAC e verdetto deterministico. Skill + 3 comandi + 5 hook + motore di stato a zero dipendenze.",
+  "author": {
+    "name": "Lorenzo Danilov"
+  },
+  "homepage": "https://github.com/VascendTechnologies/danilov-method",
+  "license": "MIT",
+  "keywords": [
+    "danilov",
+    "prompt-engineering",
+    "structured-prompts",
+    "danilovgoal",
+    "deterministic-verification",
+    "one-hot",
+    "agent-planning"
+  ]
+}
