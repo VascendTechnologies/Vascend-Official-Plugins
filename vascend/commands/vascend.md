@@ -137,12 +137,16 @@ non dalle tue parole.
    node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/subplan.js <macroBit> "<titolo sub>" "t01: micro" "t02: micro" ...
    ```
    crea `sid.sub<macroBit>.md` (relazione master↔sub implicita nel naming).
-3. **Progettazione parallela con 3 sotto-agenti** (opzionale, consigliato per
-   piani ampi): dopo aver creato il master, lancia **in parallelo** (Agent tool,
-   una sola risposta con più tool-call) un sotto-agente per macro-task. A
-   ciascuno passa un **brief numerico Danilov** del suo macro-task; ognuno
-   restituisce la lista di micro-task `t01..`. Poi TU crei i sotto-piani con
-   `subplan.js` (gli script li tocchi solo tu, mai i sotto-agenti).
+3. **Progettazione parallela coi sotto-agenti `vascend-planner`** (opzionale,
+   consigliato per piani ampi): dopo aver creato il master, lancia **in
+   parallelo** (Agent tool con `subagent_type: vascend-planner`, una sola
+   risposta con più tool-call) un planner per macro-task. A ciascuno passa un
+   **brief numerico Danilov** del suo macro-task; ognuno restituisce la lista di
+   micro-task `t01..`. Poi TU crei i sotto-piani con `subplan.js` (gli script li
+   tocchi solo tu, mai i sotto-agenti). Per **eseguire** una stanza puoi
+   delegarla a `vascend-executor` (Agent tool, `subagent_type: vascend-executor`):
+   passagli il path degli script, il `<bit>` (e il `<file>` del sub) e il `cwd`;
+   fa il lavoro reale e marca via script, senza toccare il goal.
 4. **Esecuzione gerarchica**, in ordine di macro-bit:
    - accendi i micro del sotto-piano (passa il FILE del sub):
      ```
