@@ -71,7 +71,7 @@ process.stdin.on('end', () => {
 
     // --- Flag attivo: ENFORCEMENT (pattern /goal a tema castello) ---
     const v = g ? g.verdict : null;
-    const compactPath = path.join(cwd, '.danilov-compact.md');
+    const compactPath = path.join(cwd, '.vascend-compact.md');
 
     // Castello ILLUMINATO -> prima del rilascio, chiedi il checkpoint compact.
     if (v && v.conforme) {
@@ -86,7 +86,7 @@ process.stdin.on('end', () => {
         try { fs.writeFileSync(flagFile, JSON.stringify({ ...flag, compactAsked: true }), 'utf8'); } catch {}
         const reason = ui.card(`castello ${ui.G.dot} illuminato ${ui.G.dot} ${v.popcount}`, [
           ui.kv('Stato', `${ui.G.check} tutte le stanze accese`),
-          ui.kv('Prima', 'fissa il checkpoint (come /danilov-compact)'),
+          ui.kv('Prima', 'fissa il checkpoint (come /vascend-compact)'),
           ui.kv('Come', 'sommario formato Danilov (INDICE/DEFINIZIONI/RELAZIONI, @fatto/@stato/@aperto)'),
           ui.kv('Dove', `${compactPath} (tool Write)`),
           ui.kv('Poi', 'termina'),

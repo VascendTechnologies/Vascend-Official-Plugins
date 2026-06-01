@@ -1,11 +1,11 @@
 ---
-description: Interruttore del metodo Danilov. `/danilov on` (o senza argomento) attiva la modalita' STICKY (ogni prompt diventa un obiettivo Danilov); `/danilov off` la spegne; `/danilov <obiettivo>` esegue un goal one-shot col metodo (bit one-hot + trace firmata + audit deterministico).
+description: Interruttore Vascend (metodo Danilov). `/vascend on` (o senza argomento) attiva la modalita' STICKY (ogni prompt diventa un obiettivo Danilov); `/vascend off` la spegne; `/vascend <obiettivo>` esegue un goal one-shot col metodo (bit one-hot + trace firmata + audit deterministico).
 argument-hint: "on | off | <obiettivo>"
 ---
 
-# Comando /danilov
+# Comando /vascend
 
-`/danilov` è un **interruttore** del metodo Danilov, più una scorciatoia per un
+`/vascend` è un **interruttore** del metodo Danilov, più una scorciatoia per un
 obiettivo singolo.
 
 ## on / off / obiettivo — cosa fa `$ARGUMENTS`
@@ -19,7 +19,7 @@ affidabile):
   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mode.js on
   ```
   Poi conferma che da ora **ogni** prompt è un obiettivo Danilov (pianificato,
-  tracciato, validato) senza riscrivere il comando; per spegnere `/danilov off`.
+  tracciato, validato) senza riscrivere il comando; per spegnere `/vascend off`.
   **NON pianificare nulla, NON creare goal: fermati qui.**
 - **`off`**: spegni la modalità. Esegui:
   ```
@@ -57,7 +57,7 @@ L'obiettivo e':
 Procedi adesso, in quest'ordine, SENZA chiedere conferma.
 
 **Prima di tutto — riprendi il checkpoint se esiste.** Se in `<cwd>` c'è un
-file `.danilov-compact.md` (lasciato da un `/danilov-compact` precedente),
+file `.vascend-compact.md` (lasciato da un `/vascend-compact` precedente),
 leggilo PRIMA di pianificare: è la foto compatta dello stato. Riparti da lì
 — gli `@aperto` sono i thread da continuare, gli `@stato` le decisioni da
 non perdere. Incorpora quel contesto nel nuovo piano. Se non esiste, parti
