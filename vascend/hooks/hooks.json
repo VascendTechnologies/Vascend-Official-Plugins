@@ -1,6 +1,17 @@
 {
-  "description": "Metodo Danilov: attivazione, protezione anti-manomissione, enforcement deterministico e memoria.",
+  "description": "Vascend (metodo Danilov): attivazione, protezione anti-manomissione, enforcement deterministico, resume cross-sessione e memoria.",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/vascend-resume.js\"",
+            "timeout": 6
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

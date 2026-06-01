@@ -24,8 +24,17 @@ const STATE_DIR = path.join(
   process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'),
   '.danilov-state'
 );
-// Stallo: turni consecutivi senza accendere stanze nuove prima di rilasciare.
-const MAX_STALL = 3;
+// Stallo: turni consecutivi senza accendere stanze nuove prima di rilasciare
+// l'enforcement (anti-loop). Configurabile via env DANILOV_MAX_STALL:
+//   N>=1     -> rilascia dopo N turni di stallo
+//   0        -> non rilascia MAI (task lungo persistente: l'agente resta agganciato)
+//   assente  -> default 3
+const MAX_STALL = (() => {
+  const raw = process.env.DANILOV_MAX_STALL;
+  if (raw === '0') return Infinity;
+  const n = parseInt(raw, 10);
+  return Number.isInteger(n) && n >= 1 ? n : 3;
+})();
 
 // Verdetto del goal della sessione (o null se non esiste ancora).
 function goalVerdict(cwd, sessionId) {
@@ -137,8 +146,11 @@ process.stdin.on('end', () => {
       if (v.missingTasks.length) {
         rows.push(ui.kv('Al buio', v.missingTasks.map(t => `${t.task} (${v.hex(t.mask)})`).join(', ')));
       }
+      const next = v.missingTasks && v.missingTasks[0];
+      if (next) rows.push(ui.kv('Prossima', `${next.task} ${v.hex(next.mask)} ${ui.G.dot} mark.js ${next.bit} OK`));
       if (v.inconsistencies.length) rows.push(ui.kv('Incoerenze', v.inconsistencies.join('; ')));
-      rows.push(ui.kv('Azione', 'entra nelle stanze buie, mark.js <bit> OK, poi validate.js — non terminare'));
+      if (stalls > 0 && MAX_STALL !== Infinity) rows.push(ui.kv('Stallo', `${stalls}/${MAX_STALL} turni senza stanze nuove`));
+      rows.push(ui.kv('Azione', 'esegui la stanza, mark.js <bit> OK, poi validate.js — non terminare'));
       reason = ui.card(`castello ${ui.G.dot} ${v.popcount}`, rows);
     }
 
