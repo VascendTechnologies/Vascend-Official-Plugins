@@ -1,6 +1,6 @@
 {
   "name": "danilov-method",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Metodo Danilov per Claude Code: prompt strutturati INDICE/DEFINIZIONI/RELAZIONI in notazione numerica compatta, ed esecuzione DanilovGoal tracciata a bit one-hot con Trace firmata HMAC e verdetto deterministico. Piani gerarchici (macro/micro con roll-up), specchio nella todo nativa, annullamento firmato (unmark) e anteprima --dry contro errori di cwd. Skill + 3 comandi + 5 hook + motore di stato a zero dipendenze.",
   "author": {
     "name": "Lorenzo Danilov"

@@ -102,6 +102,8 @@ node scripts/danilov/validate.js --deep               # master + ogni sub + coer
 La relazione master↔sub è implicita nel naming (`<sid>.sub<macroBit>.md`
 accanto al master): nessuna modifica al master, nessuna violazione del protect
 hook. I macro-task senza sotto-piano restano atomici (comportamento invariato).
+Rigenerare il master con `plan.js` **invalida e rimuove** i sotto-piani della
+sessione precedente, così non si riagganciano per naming ai nuovi macro-bit.
 Il comando `/danilov` può delegare la progettazione dei sotto-piani a più
 sotto-agenti in parallelo, poi seguirli con `mark.js`/`status.js`.
 
