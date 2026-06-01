@@ -125,6 +125,17 @@ try {
   const N7 = run(['add', 'fix parser.py>p7m | asn1crypto', '--project', 'demo', '--plan', 'pv2']);
   check('N7 add formato v2', N7.json && N7.json.ok === true && N7.json.record.action === 'fix' && N7.json.record.target === 'p7m', N7.json && JSON.stringify(N7.json && N7.json.record));
 
+  // O. conoscenza (A): kind + boost nel retrieval
+  const O1 = run(['add', 'decide retrieval>boost_conoscenza | le lezioni pesano piu del log di attivita', '--project', 'demo', '--plan', 'pk']);
+  check('O1 add knowledge kind', O1.json && O1.json.ok === true && O1.json.record.kind === 'knowledge', O1.json && JSON.stringify(O1.json && O1.json.record && O1.json.record.kind));
+  run(['add', 'edit retrieval>log_attivita | tocco un file', '--project', 'demo', '--plan', 'pk']);
+  const O2 = run(['search', '--query', 'retrieval conoscenza attivita boost', '--project', 'demo']);
+  check('O2 search espone kind', O2.json && O2.json.results[0] && !!O2.json.results[0].kind, O2.json && JSON.stringify(O2.json && O2.json.results[0]));
+  const top = O2.json && O2.json.results[0];
+  check('O3 knowledge in cima al ranking', top && top.kind === 'knowledge', top && (top.kind + ' ' + top.raw));
+  const O4 = run(['query', '--action', 'decide', '--project', 'demo']);
+  check('O4 query azione conoscenza + kind', O4.json && O4.json.ok && O4.json.total >= 1 && O4.json.results[0].kind === 'knowledge', O4.json && String(O4.json.total));
+
   // L. related: memorie inerenti a un file
   run(['add', '@edit: Widget.tsx → render [ x ]', '--project', 'demo', '--plan', 'p9', '--session', 's9']);
   run(['add', '@fix: Widget.tsx → bug [ y ]', '--project', 'demo', '--plan', 'p9', '--session', 's9']);
