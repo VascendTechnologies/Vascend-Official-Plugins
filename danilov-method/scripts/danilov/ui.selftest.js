@@ -12,9 +12,10 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const DANILOV = path.join(CLAUDE_DIR, 'scripts', 'danilov');
-const STATE_DIR = path.join(CLAUDE_DIR, '.danilov-state');
-const HOOKS = path.join(CLAUDE_DIR, 'hooks');
+const STATE_DIR = path.join(CLAUDE_DIR, '.danilov-state'); // stato runtime: ~/.claude
+// Codice e hook: dentro il plugin. ui.selftest.js vive in <plugin>/scripts/danilov.
+const DANILOV = __dirname;
+const HOOKS = path.join(__dirname, '..', '..', 'hooks');
 const ui = require(path.join(DANILOV, 'ui.js'));
 const session = require(path.join(DANILOV, 'session.js'));
 

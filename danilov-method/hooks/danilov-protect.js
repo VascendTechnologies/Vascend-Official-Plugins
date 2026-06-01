@@ -8,6 +8,8 @@
 'use strict';
 
 const path = require('path');
+// Script dentro il plugin (__dirname = <plugin>/hooks). POSIX-style per il messaggio.
+const SCRIPTS = path.join(__dirname, '..', 'scripts', 'danilov').replace(/\\/g, '/');
 
 let data = '';
 const timeout = setTimeout(() => process.exit(0), 3000);
@@ -39,7 +41,7 @@ process.stdin.on('end', () => {
           permissionDecision: 'deny',
           permissionDecisionReason:
             'I file DanilovGoal/ non si modificano a mano (anti-manomissione). ' +
-            'Usa gli script: node ~/.claude/scripts/danilov/plan.js per il piano, ' +
+            'Usa gli script: node ' + SCRIPTS + '/plan.js per il piano, ' +
             'mark.js <bit> OK per marcare i task, validate.js per il verdetto.',
         },
       }));

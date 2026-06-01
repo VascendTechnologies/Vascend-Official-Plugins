@@ -1,15 +1,15 @@
 {
-  "name": "vascend",
+  "name": "vascend-official-plugins",
   "version": "1.0.0",
-  "description": "Marketplace dei plugin Vascend per Claude Code.",
-  "repository": "https://github.com/VascendTechnologies/danilov-method",
+  "description": "Marketplace ufficiale dei plugin Vascend per Claude Code.",
+  "repository": "https://github.com/VascendTechnologies/Vascend-Official-Plugins",
   "owner": {
     "name": "Lorenzo Danilov"
   },
   "plugins": [
     {
       "name": "danilov-method",
-      "source": "./",
+      "source": "./danilov-method",
       "description": "Metodo Danilov: prompt strutturati INDICE/DEFINIZIONI/RELAZIONI + esecuzione DanilovGoal tracciata a bit one-hot con Trace firmata HMAC e verdetto deterministico."
     }
   ]
