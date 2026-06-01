@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Stop Hook: cattura automatica della memoria Danilov dalla CHAT di sessione.
 // Quando il metodo e' attivo, a fine turno legge il transcript della sessione
-// ed estrae le righe-evento "@azione: entita -> obiettivo [nota]" archiviandole
-// (dedup) nello store di knowagebase via memory.js harvest. Silenzioso e non
-// bloccante: non emette decisioni, non interrompe lo Stop, non fallisce mai.
+// ed estrae le righe-evento (relazioni) archiviandole (dedup) nei file .vascend
+// LOCALI via memory.js harvest. Nessun motore esterno (Animus disabilitato).
+// Silenzioso e non bloccante: non emette decisioni, non interrompe lo Stop.
 
 'use strict';
 
@@ -16,14 +16,6 @@ const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.cl
 const DANILOV = path.join(__dirname, '..', 'scripts', 'danilov'); // codice: dentro il plugin
 const { isDanilovActive, currentSessionId, goalFile } = require(path.join(DANILOV, 'session.js'));
 const MEMORY = path.join(DANILOV, 'memory.js');
-
-// Ricava lo user-id Animus dal claim `sub` del JWT (DANILOV_ENGINE_TOKEN).
-function userIdFromJwt(tok) {
-  try {
-    const payload = JSON.parse(Buffer.from(String(tok).split('.')[1], 'base64').toString('utf8'));
-    return String(payload.sub || '');
-  } catch { return ''; }
-}
 
 let input = '';
 const timeout = setTimeout(() => process.exit(0), 4000);
@@ -49,22 +41,9 @@ process.stdin.on('end', () => {
       }
     } catch {}
 
+    // Harvest LOCALE nei file .vascend. Nessun mirror esterno (Animus disabilitato).
     const args = [MEMORY, 'harvest', transcript, '--cwd', cwd, '--session', sid, '--plan', plan];
-    const child = execFile('node', args, { timeout: 8000 }, () => {
-      // Dopo l'harvest locale: rispecchia la sessione in Animus come un unico
-      // documento rigenerato. Serve DANILOV_ENGINE_TOKEN (lo user-id si ricava
-      // dal claim `sub`); la CLI nativa gira dentro il container backend.
-      // Best-effort: non blocca lo Stop, non fallisce mai.
-      const tok = process.env.DANILOV_ENGINE_TOKEN;
-      const uid = tok ? userIdFromJwt(tok) : '';
-      if (!uid) return process.exit(0);
-      const ingArgs = [
-        MEMORY, 'engine', 'ingest', '--docker',
-        '--user-id', uid, '--session', sid, '--cwd', cwd,
-      ];
-      const ing = execFile('node', ingArgs, { timeout: 90000 }, () => process.exit(0));
-      ing.on('error', () => process.exit(0));
-    });
+    const child = execFile('node', args, { timeout: 8000 }, () => process.exit(0));
     child.on('error', () => process.exit(0));
   } catch { process.exit(0); }
 });

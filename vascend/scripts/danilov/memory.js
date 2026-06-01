@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-// danilov-memory — catalogo CLI di memoria persistente per il metodo Danilov.
-// Le righe-evento "@<azione>: <entita> -> <obiettivo> [ nota ]" prodotte durante
-// un DanilovGoal vengono catturate e archiviate come memoria ricercabile,
-// taggata per PROGETTO + PIANO. La ricerca porta la logica del paper VibeSearch
-// (SearchPlan + BM25 + cue-coverage + RRF fusion + plan_hash verificabile) in
-// un layer Node portatile a zero dipendenze: funziona offline, non avvia il
-// motore pesante (Docker/Postgres/FalkorDB). Quando il motore vero e' acceso,
-// 'search --engine' puo' delegargli la query (bridge opzionale).
+// vascend-memory — memoria persistente LOCALE del metodo Danilov.
+// Le righe-evento prodotte durante un DanilovGoal vengono catturate e archiviate
+// come memoria ricercabile, taggata per PROGETTO + PIANO.
 //
-// Stile CLI: registry auto-descrivente (CLI-Anything) + output JSON {ok:...}
-// a riga singola (lead-craft-forge). Exit 0 = JSON valido (leggi "ok"); 1 = ok:false.
+// Storage: file `.vascend` in NOTAZIONE A RELAZIONI (compatta), uno per
+// progetto, sotto ~/.claude. NESSUN motore esterno (Animus/Docker/Postgres):
+// tutto locale, offline, zero dipendenze. Ogni riga e' un ARCO del grafo:
+//   <ts> · <azione> <entity>[>target] [| nota]
+// entity --[azione]--> target. Da qui: ricerca (BM25+cue+RRF), query
+// strutturata e export a grafo (node-link JSON) per un'app esterna.
 //
 // Uso:  node memory.js <comando> [args]   |   node memory.js tools
 'use strict';
@@ -18,16 +17,15 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
 
-// UTF-8 forzato su Windows (come lead-craft-forge).
 try { process.stdout.setDefaultEncoding('utf8'); process.stderr.setDefaultEncoding('utf8'); } catch {}
 
-// Radice del progetto knowagebase (per docker compose e CLI nativa).
-const KB_ROOT = process.env.DANILOV_KB_ROOT ||
-  path.join(os.homedir(), 'Desktop', 'knowagebase_gobid');
-// Dati DENTRO knowagebase_gobid (override via env per i test).
-const MEM_ROOT = process.env.DANILOV_MEM_ROOT || path.join(KB_ROOT, 'danilov-memory');
+// Storage LOCALE per-utente (niente knowagebase/Animus). Override via env (test).
+const MEM_ROOT = process.env.DANILOV_MEM_ROOT ||
+  path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), '.danilov-state', 'memory');
+
+// Azioni della voce Danilov (apertura di una riga-evento v2).
+const ACTIONS = ['read', 'find', 'plan', 'edit', 'new', 'fix', 'error', 'run', 'test', 'warn', 'skip', 'next'];
 
 // ---- util di base -----------------------------------------------------------
 
@@ -35,9 +33,8 @@ function projectSlug(cwd) {
   const base = path.basename(String(cwd || process.cwd())) || 'root';
   return base.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'root';
 }
-function storeFile(slug) { return path.join(MEM_ROOT, `${slug}.jsonl`); }
+function storeFile(slug) { return path.join(MEM_ROOT, `${slug}.vascend`); }
 
-// Parsing argv minimale: positionals + --flag value / --flag (boolean).
 function parseArgs(argv) {
   const out = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -52,33 +49,77 @@ function parseArgs(argv) {
   return out;
 }
 
-// Riga-evento Danilov -> record strutturato (o null se non e' una @-riga).
-const EVENT_RE = /^@(\w+)\s*:\s*(.+?)\s*(?:→|->)\s*(.+?)\s*(?:\[\s*(.*?)\s*\])?\s*$/;
+// Riga-evento -> {action, entity, target, note}, o null.
+//  v1 (retrocompat): @azione: entity -> target [nota]
+//  v2 (voce attuale): azione entity[>target] [| nota]  (azione nota + marcatore)
+const V1_RE = /^@(\w+)\s*:\s*(.+?)\s*(?:→|->)\s*(.+?)\s*(?:\[\s*(.*?)\s*\])?\s*$/;
 function parseEventLine(line) {
-  const m = EVENT_RE.exec(String(line).trim());
-  if (!m) return null;
-  return { action: m[1].toLowerCase(), entity: m[2].trim(), target: m[3].trim(), note: (m[4] || '').trim() };
+  const s = String(line).trim();
+  const m1 = V1_RE.exec(s);
+  if (m1) return { action: m1[1].toLowerCase(), entity: m1[2].trim(), target: m1[3].trim(), note: (m1[4] || '').trim() };
+  const m2 = s.match(/^(\w+)\s+(.+)$/);
+  if (!m2) return null;
+  const action = m2[1].toLowerCase();
+  if (!ACTIONS.includes(action)) return null;     // solo azioni note
+  let rest = m2[2];
+  if (!/[>|]/.test(rest)) return null;            // serve un marcatore di relazione
+  let note = '';
+  const pipe = rest.indexOf('|');
+  if (pipe >= 0) { note = rest.slice(pipe + 1).trim(); rest = rest.slice(0, pipe).trim(); }
+  let entity = rest, target = '';
+  const gt = rest.indexOf('>');
+  if (gt >= 0) { entity = rest.slice(0, gt).trim(); target = rest.slice(gt + 1).trim(); }
+  if (!entity) return null;
+  return { action, entity, target, note };
 }
 
-function recordId(session, raw) {
-  return crypto.createHash('sha1').update(`${session}|${raw}`).digest('hex').slice(0, 16);
+// raw canonico = riga-relazione v2 (cio' che salviamo e mostriamo).
+function toRelation(p) {
+  return `${p.action} ${p.entity}${p.target ? `>${p.target}` : ''}${p.note ? ` | ${p.note}` : ''}`;
+}
+function recordId(project, plan, raw) {
+  return crypto.createHash('sha1').update(`${project}|${plan}|${raw}`).digest('hex').slice(0, 16);
 }
 
+// ---- serializzazione .vascend (archi raggruppati per piano) -----------------
+
+const SEP = ' · ';
 function readRecords(slug) {
   const f = storeFile(slug);
   if (!fs.existsSync(f)) return [];
-  return fs.readFileSync(f, 'utf8').split('\n')
-    .filter(l => l.trim())
-    .map(l => { try { return JSON.parse(l); } catch { return null; } })
-    .filter(Boolean);
+  const out = [];
+  let plan = '(senza piano)';
+  for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const ph = t.match(/^@plan\[(.*)\]$/);
+    if (ph) { plan = ph[1] || '(senza piano)'; continue; }
+    const i = t.indexOf(SEP);
+    if (i < 0) continue;
+    const ts = t.slice(0, i).trim();
+    const raw = t.slice(i + SEP.length).trim();
+    const p = parseEventLine(raw);
+    if (!p) continue;
+    out.push({ id: recordId(slug, plan, raw), ts, project: slug, plan,
+      action: p.action, entity: p.entity, target: p.target, note: p.note, raw });
+  }
+  return out;
 }
-
-function appendRecord(slug, rec) {
+function writeRecords(slug, records) {
   fs.mkdirSync(MEM_ROOT, { recursive: true });
-  fs.appendFileSync(storeFile(slug), JSON.stringify(rec) + '\n', 'utf8');
+  const byPlan = new Map();
+  for (const r of records) { if (!byPlan.has(r.plan)) byPlan.set(r.plan, []); byPlan.get(r.plan).push(r); }
+  const lines = [`# vascend-memory · ${slug}`, ''];
+  for (const [plan, recs] of byPlan) {
+    recs.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+    lines.push(`@plan[${plan}]`);
+    for (const r of recs) lines.push(`${r.ts}${SEP}${r.raw}`);
+    lines.push('');
+  }
+  fs.writeFileSync(storeFile(slug), lines.join('\n'), 'utf8');
 }
 
-// Titolo del piano corrente dal goal di sessione (se risolvibile).
+// Titolo del piano corrente dal goal di sessione (best-effort).
 function detectPlan(cwd) {
   try {
     const { goalFile } = require('./session.js');
@@ -100,49 +141,43 @@ function out(obj, pretty) {
   process.exit(obj.ok === false ? 1 : 0);
 }
 
-// ---- costruzione record + ingest condiviso ----------------------------------
+// ---- record + ingest --------------------------------------------------------
 
-function buildRecord(raw, ctx) {
-  const parsed = parseEventLine(raw);
+function buildRecord(rawInput, ctx) {
+  const parsed = parseEventLine(rawInput);
   if (!parsed) return null;
-  const session = ctx.session || 'no-session';
+  const raw = toRelation(parsed);                 // normalizza a relazione v2
+  const project = ctx.project;
+  const plan = ctx.plan || '(senza piano)';
   return {
-    id: recordId(session, raw),
+    id: recordId(project, plan, raw),
     ts: ctx.ts || new Date().toISOString(),
-    project: ctx.project,
-    cwd: ctx.cwd || null,
-    plan: ctx.plan || '(senza piano)',
-    session,
-    action: parsed.action,
-    entity: parsed.entity,
-    target: parsed.target,
-    note: parsed.note,
-    raw: String(raw).trim(),
+    project, cwd: ctx.cwd || null, plan, session: ctx.session || 'no-session',
+    action: parsed.action, entity: parsed.entity, target: parsed.target, note: parsed.note, raw,
   };
 }
 
-// Inserisce record nuovi (dedup per id), ritorna {added, skipped, ids}.
+// Inserisce record nuovi (dedup per id), riscrive lo store. {added, skipped, ids}.
 function ingest(slug, records) {
-  const existing = new Set(readRecords(slug).map(r => r.id));
+  const existing = readRecords(slug);
+  const seen = new Set(existing.map(r => r.id));
   let added = 0, skipped = 0; const ids = [];
+  const merged = existing.slice();
   for (const r of records) {
-    if (existing.has(r.id)) { skipped++; continue; }
-    appendRecord(slug, r); existing.add(r.id); added++; ids.push(r.id);
+    if (seen.has(r.id)) { skipped++; continue; }
+    seen.add(r.id); merged.push(r); added++; ids.push(r.id);
   }
+  if (added) writeRecords(slug, merged);
   return { added, skipped, ids };
 }
 
-// ---- retrieval portatile (logica VibeSearch: BM25 + cue + RRF) --------------
+// ---- retrieval portatile (VibeSearch: BM25 + cue + RRF) ---------------------
 
 function tokenize(text) {
   return String(text || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(t => t.length >= 2);
 }
 const docText = (r) => [r.action, r.entity, r.target, r.note].join(' ');
 
-// plan_hash: SHA-256 del SearchPlan canonico -> ricerca riproducibile/verificabile.
-// Canonicalizza ricorsivamente (chiavi ordinate a OGNI livello). Un replacer-
-// array di JSON.stringify scarterebbe le chiavi annidate dei filtri -> hash
-// che ignora i filtri (collisione). Cosi il plan_hash resta fedele al piano.
 function canonical(v) {
   if (Array.isArray(v)) return v.map(canonical);
   if (v && typeof v === 'object') return Object.keys(v).sort().reduce((o, k) => { o[k] = canonical(v[k]); return o; }, {});
@@ -152,18 +187,17 @@ function planHash(plan) {
   return crypto.createHash('sha256').update(JSON.stringify(canonical(plan))).digest('hex').slice(0, 16);
 }
 
-// Carica i record candidati: progetto specifico, o tutti i .jsonl se project==null.
-function loadCandidates(filters, cwd) {
+// Candidati: progetto specifico, o tutti i .vascend se project==null.
+function loadCandidates(filters) {
   if (filters.project) return readRecords(filters.project);
   if (!fs.existsSync(MEM_ROOT)) return [];
   const out = [];
   for (const f of fs.readdirSync(MEM_ROOT)) {
-    if (f.endsWith('.jsonl')) out.push(...readRecords(f.replace(/\.jsonl$/, '')));
+    if (f.endsWith('.vascend')) out.push(...readRecords(f.replace(/\.vascend$/, '')));
   }
   return out;
 }
 
-// BM25 + cue-coverage IDF-pesata, fusi con Reciprocal Rank Fusion.
 function rankRecords(query, pool) {
   if (!pool.length) return [];
   const k1 = 1.5, b = 0.75, RRF_K = 60;
@@ -174,8 +208,7 @@ function rankRecords(query, pool) {
   const idf = (t) => { const n = df.get(t) || 0; return Math.log(1 + (N - n + 0.5) / (n + 0.5)); };
   const avgdl = docs.reduce((s, d) => s + d.length, 0) / N;
 
-  const qAll = tokenize(query);
-  const qTerms = [...new Set(qAll)];
+  const qTerms = [...new Set(tokenize(query))];
   const sumIdfQ = qTerms.reduce((s, t) => s + idf(t), 0) || 1;
 
   const scored = pool.map((r, i) => {
@@ -183,9 +216,8 @@ function rankRecords(query, pool) {
     const tf = new Map();
     for (const t of toks) tf.set(t, (tf.get(t) || 0) + 1);
     const dl = toks.length || 1;
-    let bm25 = 0;
+    let bm25 = 0, coveredIdf = 0;
     const matched = [];
-    let coveredIdf = 0;
     for (const t of qTerms) {
       const f = tf.get(t) || 0;
       if (f > 0) {
@@ -194,11 +226,10 @@ function rankRecords(query, pool) {
         matched.push({ term: t, idf: +idf(t).toFixed(3) });
       }
     }
-    const cue = coveredIdf / sumIdfQ; // copertura cue (SPECTRA-MEM-lite)
+    const cue = coveredIdf / sumIdfQ;
     return { i, bm25, cue, matched, r };
   }).filter(s => s.bm25 > 0 || s.cue > 0);
 
-  // ranking per BM25 e per cue, poi RRF.
   const byBm25 = [...scored].sort((a, c) => c.bm25 - a.bm25);
   const byCue = [...scored].sort((a, c) => c.cue - a.cue);
   const rankB = new Map(byBm25.map((s, idx) => [s.i, idx]));
@@ -211,120 +242,39 @@ function rankRecords(query, pool) {
   return scored.map(s => ({
     score: +s.score.toFixed(6), bm25: +s.bm25.toFixed(3), cue: +s.cue.toFixed(3),
     explain: { matched: s.matched, coverage: +s.cue.toFixed(3) },
-    id: s.r.id, ts: s.r.ts, project: s.r.project, plan: s.r.plan,
-    action: s.r.action, raw: s.r.raw,
+    id: s.r.id, ts: s.r.ts, project: s.r.project, plan: s.r.plan, action: s.r.action, raw: s.r.raw,
   }));
 }
 
-// Base URL del motore (override env). Unica fonte per probe e bridge.
-function engineBase() {
-  return (process.env.DANILOV_ENGINE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
-}
-
-const HEALTH_CACHE = path.join(MEM_ROOT, '.engine-health.json');
-const HEALTH_TTL = 30000; // 30s: durante un piano non risondare a ogni search.
-
-// Probe di raggiungibilita': QUALUNQUE risposta HTTP = motore su; connessione
-// rifiutata / timeout = giu. Prova /health poi / (root). Timeout breve.
-async function probeEngine() {
-  const base = engineBase();
-  const t0 = Date.now();
-  let last;
-  for (const pth of ['/health', '/']) {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 1200);
-      const res = await fetch(base + pth, { method: 'GET', signal: ctrl.signal });
-      clearTimeout(timer);
-      return { up: true, url: base, status: res.status, latency_ms: Date.now() - t0 };
-    } catch (e) { last = e; }
-  }
-  return { up: false, url: base, latency_ms: Date.now() - t0, error: String((last && last.message) || last) };
-}
-
-// Stato del motore con cache TTL (file in MEM_ROOT). force=true ignora la cache.
-async function engineUp(opts = {}) {
-  if (!opts.force) {
-    try {
-      const c = JSON.parse(fs.readFileSync(HEALTH_CACHE, 'utf8'));
-      // valida solo se fresca E riferita allo STESSO url (l'env puo' cambiare).
-      if (Date.now() - c.ts < HEALTH_TTL && c.v && c.v.url === engineBase()) return { ...c.v, cached: true };
-    } catch {}
-  }
-  const v = await probeEngine();
-  try { fs.mkdirSync(MEM_ROOT, { recursive: true }); fs.writeFileSync(HEALTH_CACHE, JSON.stringify({ ts: Date.now(), v }), 'utf8'); } catch {}
-  return { ...v, cached: false };
-}
-
-// Bridge al motore vero. Usa /api/search/memory: modalita' deterministica
-// (niente lane dense/embedding) pensata per il richiamo di memorie, con piu'
-// risultati. Timeout breve.
-async function tryEngine(plan, k) {
-  const url = engineBase() + '/api/search/memory';
-  const token = process.env.DANILOV_ENGINE_TOKEN;
-  // Il motore Vascend protegge la search (Depends get_current_user): senza
-  // Bearer risponde 401 e la delega non avviene mai. Mandiamo il token se c'e'.
-  const headers = { 'content-type': 'application/json' };
-  if (token) headers.authorization = `Bearer ${token}`;
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 1500);
-    const res = await fetch(url, {
-      method: 'POST', signal: ctrl.signal, headers,
-      body: JSON.stringify({ query: plan.semantic, k: Math.max(1, Math.min(100, k || 20)) }),
-    });
-    clearTimeout(timer);
-    if (!res.ok) {
-      const hint = (res.status === 401 || res.status === 403) && !token
-        ? ' — manca DANILOV_ENGINE_TOKEN (Bearer)' : '';
-      return { ok: false, note: `engine HTTP ${res.status}${hint} (fallback locale)` };
-    }
-    const json = await res.json();
-    return { ok: true, url, authed: !!token, results: json };
-  } catch (e) {
-    return { ok: false, note: `engine non raggiungibile: ${String(e && e.message || e)} (fallback locale)` };
-  }
-}
-
-// ---- comandi (registry auto-descrivente) ------------------------------------
+// ---- comandi ----------------------------------------------------------------
 
 const COMMANDS = {
   add: {
-    summary: 'Memorizza una riga-evento "@azione: entita -> obiettivo [nota]" taggata project+plan.',
+    summary: 'Memorizza una riga-evento (v2 "azione entity>target | nota" o v1 "@azione: x -> y [n]") taggata project+plan.',
     args: ['<raw>', '--project S', '--plan S', '--session S', '--cwd P', '--pretty'],
     run(a) {
       const raw = a._[0];
       if (!raw) return out({ ok: false, error: 'manca la riga-evento (primo argomento)' }, a.pretty);
       const cwd = a.cwd || process.cwd();
-      const ctx = {
-        project: a.project || projectSlug(cwd),
-        cwd,
-        plan: a.plan || detectPlan(cwd),
-        session: a.session || detectSession(),
-      };
+      const ctx = { project: a.project || projectSlug(cwd), cwd, plan: a.plan || detectPlan(cwd), session: a.session || detectSession() };
       const rec = buildRecord(raw, ctx);
-      if (!rec) return out({ ok: false, error: 'la riga non e\' un evento Danilov (@azione: x -> y)' }, a.pretty);
+      if (!rec) return out({ ok: false, error: 'la riga non e\' un evento Danilov (azione entity>target | nota)' }, a.pretty);
       const { added } = ingest(rec.project, [rec]);
       out({ ok: true, added: added === 1, id: rec.id, project: rec.project, plan: rec.plan, record: rec }, a.pretty);
     },
   },
 
   harvest: {
-    summary: 'Estrae le righe-evento @ dai messaggi assistant di un transcript jsonl e le ingerisce (dedup).',
+    summary: 'Estrae le righe-evento dai messaggi assistant di un transcript jsonl e le ingerisce (dedup).',
     args: ['<transcript.jsonl>', '--project S', '--plan S', '--session S', '--cwd P', '--pretty'],
     run(a) {
       const tf = a._[0];
       if (!tf || !fs.existsSync(tf)) return out({ ok: false, error: `transcript non trovato: ${tf || '(manca)'}` }, a.pretty);
       const cwd = a.cwd || process.cwd();
-      const ctx = {
-        project: a.project || projectSlug(cwd),
-        cwd,
-        plan: a.plan || detectPlan(cwd),
-        session: a.session || detectSession(),
-      };
+      const ctx = { project: a.project || projectSlug(cwd), cwd, plan: a.plan || detectPlan(cwd), session: a.session || detectSession() };
       let scanned = 0, candidates = 0;
       const records = [];
-      const seenRaw = new Set(); // dedup intra-transcript prima dell'ingest
+      const seenRaw = new Set();
       for (const line of fs.readFileSync(tf, 'utf8').split('\n')) {
         if (!line.trim()) continue;
         let o; try { o = JSON.parse(line); } catch { continue; }
@@ -338,62 +288,79 @@ const COMMANDS = {
             const ev = parseEventLine(tline);
             if (!ev) continue;
             candidates++;
-            const raw = tline.trim();
+            const raw = toRelation(ev);
             if (seenRaw.has(raw)) continue;
             seenRaw.add(raw);
-            const ts = o.timestamp || ctx.ts;
-            const rec = buildRecord(raw, { ...ctx, ts });
+            const rec = buildRecord(tline, { ...ctx, ts: o.timestamp || ctx.ts });
             if (rec) records.push(rec);
           }
         }
       }
       const { added, skipped, ids } = ingest(ctx.project, records);
-      out({ ok: true, transcript: path.basename(tf), project: ctx.project, plan: ctx.plan,
-            scanned, candidates, added, skipped, ids }, a.pretty);
+      out({ ok: true, transcript: path.basename(tf), project: ctx.project, plan: ctx.plan, scanned, candidates, added, skipped, ids }, a.pretty);
     },
   },
+
   search: {
-    summary: 'Cerca nella memoria (BM25 + cue-coverage + RRF). AUTO: usa il motore se UP, altrimenti locale. plan_hash riproducibile.',
-    args: ['--query S', '--project S', '--all', '--plan S', '--action S', '--k N', '--engine (forza)', '--local (salta motore)', '--pretty'],
-    async run(a) {
+    summary: 'Cerca nella memoria locale (BM25 + cue-coverage + RRF). plan_hash riproducibile. Solo locale: nessun motore esterno.',
+    args: ['--query S', '--project S', '--all', '--plan S', '--action S', '--k N', '--pretty'],
+    run(a) {
       const query = a.query || a._[0];
       if (!query) return out({ ok: false, error: 'manca --query' }, a.pretty);
       const k = Math.max(1, parseInt(a.k, 10) || 8);
       const cwd = a.cwd || process.cwd();
-      const filters = {
-        project: a.all ? null : (a.project || projectSlug(cwd)),
-        plan: a.plan || null,
-        action: a.action || null,
-      };
+      const filters = { project: a.all ? null : (a.project || projectSlug(cwd)), plan: a.plan || null, action: a.action || null };
       const plan = { semantic: String(query), filters, exclude: [] };
       const plan_hash = planHash(plan);
-
-      // Gating motore: default AUTO -> sonda lo stato; up=delega, giu=locale.
-      // --engine forza il motore (no probe). --local salta il motore.
-      let mode, engineNote;
-      if (a.local) { mode = 'local-forced'; }
-      else if (a.engine) { mode = 'engine-forced'; }
-      else { const h = await engineUp(); mode = h.up ? 'engine-auto' : 'local-auto-down'; }
-
-      if (mode === 'engine-forced' || mode === 'engine-auto') {
-        const eng = await tryEngine(plan, k);
-        if (eng.ok) {
-          return out({ ok: true, source: 'engine', mode, engine_up: true, plan_hash, engine: eng.url, results: eng.results }, a.pretty);
-        }
-        // motore atteso up ma search fallita -> fallback locale, riporta perche'.
-        engineNote = eng.note; mode = 'local-engine-failed';
-      }
-
-      let pool = loadCandidates(filters, cwd);
-      pool = pool.filter(r =>
-        (!filters.plan || r.plan === filters.plan) &&
-        (!filters.action || r.action === filters.action));
+      let pool = loadCandidates(filters)
+        .filter(r => (!filters.plan || r.plan === filters.plan) && (!filters.action || r.action === filters.action));
       const ranked = rankRecords(query, pool).slice(0, k);
-      out({ ok: true, source: 'local', mode, engine_up: mode !== 'local-forced' ? (mode === 'local-auto-down' ? false : undefined) : undefined,
-            plan_hash, query: String(query), filters, count: ranked.length, total_pool: pool.length,
-            ...(engineNote ? { engine: engineNote } : {}), results: ranked }, a.pretty);
+      out({ ok: true, source: 'local', plan_hash, query: String(query), filters, count: ranked.length, total_pool: pool.length, results: ranked }, a.pretty);
     },
   },
+
+  query: {
+    summary: 'Interroga la memoria per filtri STRUTTURATI (entity/target/action/plan, match substring). Output diretto, niente ranking.',
+    args: ['--entity S', '--target S', '--action S', '--plan S', '--project S', '--all', '--limit N', '--pretty'],
+    run(a) {
+      const cwd = a.cwd || process.cwd();
+      const filters = { project: a.all ? null : (a.project || projectSlug(cwd)) };
+      const ent = String(a.entity || '').toLowerCase(), tgt = String(a.target || '').toLowerCase();
+      const act = String(a.action || '').toLowerCase(), pl = a.plan || null;
+      const limit = Math.max(1, parseInt(a.limit, 10) || 50);
+      const pool = loadCandidates(filters).filter(r =>
+        (!ent || String(r.entity || '').toLowerCase().includes(ent)) &&
+        (!tgt || String(r.target || '').toLowerCase().includes(tgt)) &&
+        (!act || r.action === act) &&
+        (!pl || r.plan === pl));
+      pool.sort((x, y) => String(y.ts).localeCompare(String(x.ts)));
+      out({ ok: true, count: Math.min(limit, pool.length), total: pool.length, filters: { entity: a.entity || null, target: a.target || null, action: a.action || null, plan: pl },
+        results: pool.slice(0, limit).map(r => ({ ts: r.ts, plan: r.plan, action: r.action, entity: r.entity, target: r.target, note: r.note, raw: r.raw, id: r.id })) }, a.pretty);
+    },
+  },
+
+  graph: {
+    summary: 'Esporta la memoria come GRAFO (node-link JSON): nodi = entita/obiettivi, archi = azioni. Per visualizzazione in app esterna (D3/Cytoscape).',
+    args: ['--project S', '--all', '--plan S', '--pretty'],
+    run(a) {
+      const cwd = a.cwd || process.cwd();
+      const filters = { project: a.all ? null : (a.project || projectSlug(cwd)) };
+      const pool = loadCandidates(filters).filter(r => !a.plan || r.plan === a.plan);
+      const nodes = new Map();
+      const touch = (label) => { if (!label) return; const n = nodes.get(label) || { id: label, label, count: 0 }; n.count++; nodes.set(label, n); };
+      const edges = [];
+      for (const r of pool) {
+        touch(r.entity);
+        if (r.target) {
+          touch(r.target);
+          edges.push({ source: r.entity, target: r.target, action: r.action, plan: r.plan, ts: r.ts, ...(r.note ? { note: r.note } : {}) });
+        }
+      }
+      out({ ok: true, project: filters.project || 'ALL', plan: a.plan || null, format: 'node-link',
+        stats: { nodes: nodes.size, edges: edges.length }, nodes: [...nodes.values()], edges }, a.pretty);
+    },
+  },
+
   list: {
     summary: 'Elenca gli ultimi N eventi memorizzati (filtrabili per project/plan/action).',
     args: ['--project S', '--all', '--plan S', '--action S', '--limit N', '--pretty'],
@@ -401,20 +368,21 @@ const COMMANDS = {
       const cwd = a.cwd || process.cwd();
       const filters = { project: a.all ? null : (a.project || projectSlug(cwd)), plan: a.plan || null, action: a.action || null };
       const limit = Math.max(1, parseInt(a.limit, 10) || 20);
-      let pool = loadCandidates(filters, cwd)
+      const pool = loadCandidates(filters)
         .filter(r => (!filters.plan || r.plan === filters.plan) && (!filters.action || r.action === filters.action));
       pool.sort((x, y) => String(y.ts).localeCompare(String(x.ts)));
       out({ ok: true, count: Math.min(limit, pool.length), total: pool.length,
-            results: pool.slice(0, limit).map(r => ({ ts: r.ts, plan: r.plan, action: r.action, raw: r.raw, id: r.id })) }, a.pretty);
+        results: pool.slice(0, limit).map(r => ({ ts: r.ts, plan: r.plan, action: r.action, raw: r.raw, id: r.id })) }, a.pretty);
     },
   },
+
   plans: {
     summary: 'Elenca i piani presenti per un progetto, con conteggio eventi e ultimo aggiornamento.',
     args: ['--project S', '--all', '--pretty'],
     run(a) {
       const cwd = a.cwd || process.cwd();
       const filters = { project: a.all ? null : (a.project || projectSlug(cwd)) };
-      const pool = loadCandidates(filters, cwd);
+      const pool = loadCandidates(filters);
       const by = new Map();
       for (const r of pool) {
         const key = `${r.project}::${r.plan}`;
@@ -425,81 +393,17 @@ const COMMANDS = {
       out({ ok: true, count: plans.length, plans }, a.pretty);
     },
   },
+
   stats: {
     summary: 'Statistiche memoria: eventi totali, per progetto, per azione.',
     args: ['--project S', '--all', '--pretty'],
     run(a) {
       const cwd = a.cwd || process.cwd();
       const filters = { project: a.all ? null : (a.project || projectSlug(cwd)) };
-      const pool = loadCandidates(filters, cwd);
+      const pool = loadCandidates(filters);
       const byProject = {}, byAction = {};
       for (const r of pool) { byProject[r.project] = (byProject[r.project] || 0) + 1; byAction[r.action] = (byAction[r.action] || 0) + 1; }
       out({ ok: true, root: MEM_ROOT, total: pool.length, byProject, byAction }, a.pretty);
-    },
-  },
-
-  engine: {
-    summary: 'Container Docker (up|down|status) + bridge alla CLI nativa (ingest|search) di knowagebase.',
-    args: ['up|down|status|ingest|search', '--user-id S', '--query S', '--project S', '--mem-file P', '--docker', '--all', '--k N', '--dry', '--pretty'],
-    run(a) {
-      const sub = (a._[0] || 'status').toLowerCase();
-      const compose = path.join(KB_ROOT, 'docker-compose.yml');
-      const backendDir = path.join(KB_ROOT, 'backend');
-
-      // --- ciclo di vita dei container ---
-      if (sub === 'up' || sub === 'down' || sub === 'status') {
-        if (!fs.existsSync(compose)) return out({ ok: false, error: `compose non trovato: ${compose}` }, a.pretty);
-        const core = a.all ? [] : ['postgres', 'falkordb', 'backend'];
-        let args;
-        if (sub === 'up') args = ['compose', '-f', compose, 'up', '-d', ...core];
-        else if (sub === 'down') args = ['compose', '-f', compose, 'down'];
-        else args = ['compose', '-f', compose, 'ps'];
-        const cmd = `docker ${args.join(' ')}`;
-        if (a.dry) return out({ ok: true, action: sub, dry: true, cmd, compose }, a.pretty);
-        try {
-          const stdout = execFileSync('docker', args, { encoding: 'utf8', timeout: sub === 'up' ? 180000 : 30000, stdio: ['ignore', 'pipe', 'pipe'] });
-          return out({ ok: true, action: sub, cmd, output: String(stdout).trim().split('\n').slice(-20).join('\n') }, a.pretty);
-        } catch (e) {
-          return out({ ok: false, action: sub, cmd, error: String((e && e.stderr) || (e && e.message) || e).trim() }, a.pretty);
-        }
-      }
-
-      // --- bridge alla CLI nativa Python (ingest/search) ---
-      if (sub === 'ingest' || sub === 'search') {
-        if (!a['user-id']) return out({ ok: false, error: 'manca --user-id' }, a.pretty);
-        const project = a.project || projectSlug(a.cwd || process.cwd());
-        const nat = ['-m', 'scripts.danilov_memory', sub, '--user-id', String(a['user-id'])];
-        if (sub === 'ingest') {
-          // local: store sull'host; docker: percorso montato dentro al container.
-          const store = a['mem-file'] || (a.docker ? `/app/danilov-memory/${project}.jsonl` : storeFile(project));
-          nat.push('--mem-file', store);
-          if (a['project-name']) nat.push('--project-name', String(a['project-name']));
-          if (a.session) nat.push('--session', String(a.session));
-        } else {
-          if (!a.query) return out({ ok: false, error: 'manca --query' }, a.pretty);
-          nat.push('--query', String(a.query));
-          if (a.k) nat.push('--top-k', String(a.k));
-        }
-        const runner = a.docker ? 'docker' : 'python';
-        const runnerArgs = a.docker
-          ? ['compose', '-f', compose, 'exec', '-T', 'backend', 'python', ...nat]
-          : nat;
-        const runCwd = a.docker ? undefined : backendDir;
-        const cmd = `${runner} ${runnerArgs.join(' ')}`;
-        if (a.dry) return out({ ok: true, action: sub, dry: true, via: a.docker ? 'docker' : 'local', cmd, cwd: runCwd || KB_ROOT }, a.pretty);
-        try {
-          const stdout = execFileSync(runner, runnerArgs, { encoding: 'utf8', timeout: 300000, cwd: runCwd, stdio: ['ignore', 'pipe', 'pipe'] });
-          let native; try { native = JSON.parse(String(stdout).trim().split('\n').pop()); } catch { native = { raw: String(stdout).trim() }; }
-          return out({ ok: native.ok !== false, action: sub, via: a.docker ? 'docker' : 'local', native }, a.pretty);
-        } catch (e) {
-          // La CLI nativa esce 1 su ok:false: il suo JSON e' in e.stdout, non in stderr.
-          const so = String((e && e.stdout) || '').trim();
-          if (so) { try { return out({ ok: false, action: sub, via: a.docker ? 'docker' : 'local', native: JSON.parse(so.split('\n').pop()) }, a.pretty); } catch {} }
-          return out({ ok: false, action: sub, cmd, error: String((e && e.stderr) || (e && e.message) || e).trim() }, a.pretty);
-        }
-      }
-
-      return out({ ok: false, error: `sub sconosciuto: ${sub} (up|down|status|ingest|search)` }, a.pretty);
     },
   },
 
@@ -514,42 +418,44 @@ const COMMANDS = {
       const limit = Math.max(1, parseInt(a.limit, 10) || 10);
       const cwd = a.cwd || process.cwd();
       const filters = { project: a.all ? null : (a.project || projectSlug(cwd)) };
-      const pool = loadCandidates(filters, cwd).filter(r =>
-        String(r.entity || '').toLowerCase().includes(base) ||
-        String(r.raw || '').toLowerCase().includes(base));
+      const pool = loadCandidates(filters).filter(r =>
+        String(r.entity || '').toLowerCase().includes(base) || String(r.raw || '').toLowerCase().includes(base));
       pool.sort((x, y) => String(y.ts).localeCompare(String(x.ts)));
       const total = pool.length;
-      out({ ok: true, file: String(file), basename: path.basename(String(file)),
-            count: Math.min(limit, total), total,
-            more: total > limit ? `node ${path.join(__dirname, 'memory.js').replace(/\\/g, '/')} related ${path.basename(String(file))} --limit ${total}` : null,
-            results: pool.slice(0, limit).map(r => ({ ts: r.ts, plan: r.plan, action: r.action, raw: r.raw, id: r.id })) }, a.pretty);
+      out({ ok: true, file: String(file), basename: path.basename(String(file)), count: Math.min(limit, total), total,
+        more: total > limit ? `node ${path.join(__dirname, 'memory.js').replace(/\\/g, '/')} related ${path.basename(String(file))} --limit ${total}` : null,
+        results: pool.slice(0, limit).map(r => ({ ts: r.ts, plan: r.plan, action: r.action, raw: r.raw, id: r.id })) }, a.pretty);
+    },
+  },
+
+  engine: {
+    summary: 'DISABILITATO: la memoria Vascend e\' locale (.vascend), nessun motore esterno (Animus/Docker).',
+    args: ['--pretty'],
+    run(a) {
+      out({ ok: false, disabled: true, error: 'memoria esterna disabilitata: la memoria Vascend e\' locale in file .vascend (notazione a relazioni). Usa search/query/graph.', root: MEM_ROOT }, a.pretty);
     },
   },
 
   health: {
-    summary: 'Dice se il motore di ricerca e\' UP (raggiungibile) o giu\'. Cache TTL 30s, --force per risondare.',
-    args: ['--force', '--pretty'],
-    async run(a) {
-      const h = await engineUp({ force: !!a.force });
-      out({ ok: true, up: h.up === true, url: h.url, latency_ms: h.latency_ms,
-            cached: h.cached === true, ...(h.status ? { status: h.status } : {}), ...(h.error ? { error: h.error } : {}) }, a.pretty);
+    summary: 'Stato memoria: locale (.vascend), nessun motore esterno.',
+    args: ['--pretty'],
+    run(a) {
+      out({ ok: true, engine: 'disabled', store: 'local .vascend', root: MEM_ROOT }, a.pretty);
     },
   },
 
   tools: {
-    summary: 'Elenca il catalogo dei comandi (CLI-Anything style).',
+    summary: 'Elenca il catalogo dei comandi.',
     args: ['--pretty'],
     run(a) {
       const tools = Object.entries(COMMANDS).map(([name, c]) => ({ name, summary: c.summary, args: c.args }));
-      out({ ok: true, catalog: 'danilov-memory', root: MEM_ROOT, tools }, a.pretty);
+      out({ ok: true, catalog: 'vascend-memory', root: MEM_ROOT, tools }, a.pretty);
     },
   },
 };
 
 // ---- dispatch ---------------------------------------------------------------
 
-// Dispatch SOLO quando eseguito come CLI: `require()` resta senza side-effect
-// (gli hook possono riusare le funzioni pure senza far partire un comando).
 if (require.main === module) {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
@@ -566,4 +472,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { parseEventLine, buildRecord, ingest, readRecords, projectSlug, recordId, storeFile, MEM_ROOT };
+module.exports = { parseEventLine, toRelation, buildRecord, ingest, readRecords, writeRecords, projectSlug, recordId, storeFile, MEM_ROOT };

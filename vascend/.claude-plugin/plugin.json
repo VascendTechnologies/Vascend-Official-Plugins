@@ -1,7 +1,7 @@
 {
   "name": "vascend",
-  "version": "1.5.0",
-  "description": "Vascend per Claude Code (metodo Danilov): prompt strutturati INDICE/DEFINIZIONI/RELAZIONI in notazione numerica compatta, ed esecuzione DanilovGoal tracciata a bit one-hot con Trace firmata HMAC e verdetto deterministico. Comandi /vascend (sticky on/off, ogni prompt diventa un obiettivo), /vascend-clear, /vascend-compact (checkpoint Danilov + invito a /clear). Piani gerarchici (macro/micro con roll-up), specchio nella todo nativa, annullamento firmato (unmark) e anteprima --dry. Skill + 3 comandi + 5 hook + motore di stato a zero dipendenze.",
+  "version": "1.6.0",
+  "description": "Vascend per Claude Code (metodo Danilov): prompt strutturati INDICE/DEFINIZIONI/RELAZIONI ed esecuzione DanilovGoal tracciata a bit one-hot con Trace firmata HMAC e verdetto deterministico. Comandi /vascend (sticky on/off), /vascend-clear, /vascend-compact (checkpoint + invito a /clear). Piani gerarchici macro/micro con roll-up; dipendenze DAG, gate di verifica (mark --check) e note per-bit; resume cross-sessione (hook SessionStart) ed enforcement persistente; subagenti vascend-planner/vascend-executor; memoria LOCALE in file .vascend a relazioni (interrogabile e esportabile a grafo), senza motori esterni. Skill + 3 comandi + 6 hook + 2 agenti + motore di stato a zero dipendenze.",
   "author": {
     "name": "Lorenzo Danilov"
   },

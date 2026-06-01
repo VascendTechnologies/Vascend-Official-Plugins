@@ -77,7 +77,7 @@ try {
     add('@edit: a.ts → b [ c ]', 'piano demo', 'x');
     const out = runHook('danilov-trigger.js', { prompt: '/danilov x', session_id: sid, cwd: CWD }, sid);
     check('H1 trigger emette card', isCard(out), JSON.stringify(out.slice(0, 40)));
-    check('H2 trigger ha riga Motore', /Motore\s+○ DOWN/.test(out));
+    check('H2 trigger memoria locale .vascend, niente Motore', /Memoria/.test(out) && /\.vascend/.test(out) && !/Motore/.test(out), out.replace(/\n/g, ' ').slice(0, 120));
   }
 
   // --- (2b) memory-file: card del file ---
