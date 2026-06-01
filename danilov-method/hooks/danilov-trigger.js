@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // UserPromptSubmit Hook: attivazione del metodo Danilov.
-// Se il prompt usa /danilov o menziona il metodo:
-//  - ALZA un flag di sessione (~/.claude/.danilov-state/<session_id>.json);
-//  - CREA automaticamente lo scheletro del goal PER-SESSIONE nello storage di
-//    progetto (~/.claude/projects/<cwd-encoded>/DanilovGoal/<session_id>.md)
-//    cosi' la status line ha subito un riferimento, garantito dall'hook e non
-//    dall'agente.
-// "annulla danilov" / "/danilov-clear" -> abbassa il flag (escape hatch).
-// Pass-through silenzioso quando non c'e' match.
+//  - `/danilov on` (o `/danilov` senza argomento)  -> MODALITA' STICKY: da quel
+//    momento OGNI prompt e' un obiettivo Danilov, senza riscrivere il comando.
+//  - `/danilov off` / `/danilov-clear` / "annulla danilov" -> spegne tutto.
+//  - `/danilov <obiettivo>`  -> obiettivo one-shot (non sticky).
+//  - keyword del metodo      -> attiva su quel prompt.
+// In tutti i casi attivi: alza il flag di sessione (~/.claude/.danilov-state/
+// <sid>.json, con `sticky` se in modalita') e crea/azzera lo scheletro del goal
+// (~/.claude/projects/<cwd-encoded>/DanilovGoal/<sid>.md). Lo stato resta in
+// ~/.claude; il codice e' nel plugin. Pass-through silenzioso fuori dai casi.
 
 const fs = require('fs');
 const path = require('path');
@@ -35,6 +36,48 @@ const SKELETON = `# DanilovGoal: (in attesa di pianificazione)
 (placeholder)
 `;
 
+// Card di surfacing della memoria del progetto (+ risveglio motore se wake).
+function memorySurface(cwd, wake) {
+  const memScript = path.join(DANILOV, 'memory.js');
+  const rows = [];
+  try {
+    const o = execFileSync('node', [memScript, 'plans', '--cwd', cwd], { encoding: 'utf8', timeout: 3000 });
+    const j = JSON.parse(o.trim().split('\n').pop());
+    if (j && j.ok && j.count > 0) {
+      const tot = j.plans.reduce((s, p) => s + (p.events || 0), 0);
+      const top = j.plans.slice(0, 3).map(p => `${p.plan} (${p.events})`).join(', ');
+      rows.push(ui.kv('Memoria', `${tot} event${tot === 1 ? 'o' : 'i'} ${ui.G.dot} ${j.count} pian${j.count === 1 ? 'o' : 'i'}`));
+      rows.push(ui.kv('', `ultimi: ${top}`));
+    } else {
+      rows.push(ui.kv('Memoria', 'nessuna ancora · popolata a fine turno'));
+    }
+  } catch {}
+  try {
+    const ho = execFileSync('node', [memScript, 'health'], { encoding: 'utf8', timeout: 4000 });
+    const hj = JSON.parse(ho.trim().split('\n').pop());
+    rows.push(ui.kv('Motore', hj && hj.up
+      ? `${ui.dot(true)} UP ${ui.G.dot} delega automatica`
+      : `${ui.dot(false)} DOWN ${ui.G.dot} ricerca locale (memory.js engine up)`));
+  } catch {}
+  rows.push(ui.kv('Cerca', 'memory.js search --query "<tema>"'));
+  rows.push(ui.kv('Tools', 'memory.js tools'));
+  if (wake && process.env.DANILOV_AUTO_ENGINE !== '0') {
+    try { spawn('node', [memScript, 'engine', 'up', '--cwd', cwd], { detached: true, stdio: 'ignore' }).unref(); } catch {}
+  }
+  return '\n' + ui.card(null, rows);
+}
+
+const INSTRUCTIONS =
+  '[Danilov] Metodo Danilov attivo. Carica la skill `danilov-prompt` (tool ' +
+  'Skill) e applicala in modalita\' DanilovGoal: INDICE/DEFINIZIONI/RELAZIONI, ' +
+  'bit one-hot. Il goal e\' nello storage di sessione del progetto (gia\' ' +
+  'creato): scrivi il piano con `node ' + scriptsPath + '/plan.js`, marca ogni ' +
+  'task con `node ' + scriptsPath + '/mark.js <bit> OK` (anteprima `--dry`, ' +
+  'annulla `node ' + scriptsPath + '/unmark.js <bit>`), chiudi con `node ' +
+  scriptsPath + '/validate.js`. Il turno non si chiude senza goal conforme. In ' +
+  'DanilovGoal pensi in relazioni, non in frasi: ogni evento e\' una riga ' +
+  '`<azione> <target>>obiettivo | nota`. Il pensiero esteso lo affidi al file.';
+
 let input = '';
 const timeout = setTimeout(() => process.exit(0), 3000);
 process.stdin.setEncoding('utf8');
@@ -49,11 +92,24 @@ process.stdin.on('end', () => {
     const cwd = data.cwd || process.cwd();
     const flagFile = path.join(STATE_DIR, `${sid}.json`);
 
-    // clear PRIMA di isSlash: "/danilov-clear" e "/danilov clear" matchano anche /danilov.
-    const isDisable =
+    // Flag corrente: serve a sapere se la modalita' STICKY e' gia' attiva.
+    let curFlag = null;
+    try { if (fs.existsSync(flagFile)) curFlag = JSON.parse(fs.readFileSync(flagFile, 'utf8')); } catch {}
+    const stickyOn = !!(curFlag && curFlag.sticky);
+
+    // Comando slash e suo argomento (on|off|<obiettivo>).
+    const slash = prompt.match(/^\s*\/danilov\b[ \t]*(.*)$/i);
+    const slashArg = slash ? slash[1].trim().toLowerCase() : null;
+
+    // OFF prima di tutto: /danilov-clear, /danilov off, "annulla|disattiva|stop danilov".
+    const isOff =
       /^\s*\/danilov[-\s]+clear\b/i.test(prompt) ||
-      /\b(annulla|disattiva|stop)\s+danilov\b/i.test(prompt);
-    const isSlash = !isDisable && /^\s*\/danilov\b/i.test(prompt);
+      /\b(annulla|disattiva|stop)\s+danilov\b/i.test(prompt) ||
+      (!!slash && /^off\b/.test(slashArg));
+    // ON: /danilov on  oppure  /danilov senza argomento -> interruttore sticky.
+    const isOn = !isOff && !!slash && (slashArg === '' || /^on\b/.test(slashArg));
+    // Obiettivo one-shot: /danilov <testo> (diverso da on/off).
+    const isObjective = !isOff && !isOn && !!slash;
 
     const TRIGGERS = [
       /\bdanilov\s*goal\b/i,
@@ -64,87 +120,56 @@ process.stdin.on('end', () => {
       /\btracciat[oa]\s+a\s+bit\b/i,
       /\bbit\s+one[- ]?hot\b/i,
     ];
-    const isKeyword = TRIGGERS.some(re => re.test(prompt));
+    const isKeyword = !slash && TRIGGERS.some(re => re.test(prompt));
+    const isPlain = !slash && !isKeyword; // prompt "normale"
 
-    // Escape hatch: spegne l'enforcement e rimuove il goal della sessione.
-    if (isDisable) {
+    // --- OFF: spegne enforcement, sticky e goal della sessione ---
+    if (isOff) {
       try { fs.rmSync(flagFile, { force: true }); } catch {}
       try { fs.rmSync(goalFile(cwd, sid), { force: true }); } catch {}
-      process.stdout.write('[Danilov] Modalita\' DanilovGoal disattivata per questa sessione.');
+      process.stdout.write('[Danilov] Modalita\' DanilovGoal disattivata (sticky OFF) per questa sessione.');
       return;
     }
 
-    if (!isSlash && !isKeyword) process.exit(0);
+    // --- ON: accende la modalita' STICKY; NON pianifica adesso ---
+    if (isOn) {
+      try {
+        fs.mkdirSync(STATE_DIR, { recursive: true });
+        fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: true, cwd, ts: Date.now() }), 'utf8');
+      } catch {}
+      const note = memorySurface(cwd, process.env.DANILOV_AUTO_ENGINE !== '0');
+      process.stdout.write(('[Danilov] Modalita\' DanilovGoal STICKY ATTIVA: da ora OGNI prompt e\' un ' +
+        'obiettivo Danilov (pianifica, marca, valida) senza riscrivere il comando. ' +
+        'Per spegnere: /danilov off.' + (note || '')).trim());
+      return;
+    }
 
-    // Alza il flag di enforcement (con cwd/progetto per riferimento).
+    // --- Questo prompt avvia un obiettivo Danilov? ---
+    // obiettivo slash, keyword, o QUALSIASI prompt mentre sticky e' attivo.
+    const shouldTrigger = isObjective || isKeyword || (stickyOn && isPlain);
+    if (!shouldTrigger) process.exit(0);
+
+    // Alza il flag (enforcement), preservando lo sticky se era attivo.
     try {
       fs.mkdirSync(STATE_DIR, { recursive: true });
-      fs.writeFileSync(
-        flagFile,
-        JSON.stringify({ active: true, cwd, ts: Date.now() }),
-        'utf8'
-      );
+      fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: stickyOn, cwd, ts: Date.now() }), 'utf8');
     } catch {}
 
-    // Crea lo scheletro del goal della sessione (riferimento immediato per la
-    // status line). /danilov esplicito = nuovo obiettivo -> reset scheletro.
-    // keyword = crea solo se manca (non distrugge un goal in corso).
+    // Goal skeleton: nuovo obiettivo (slash-obiettivo o prompt sticky) -> reset;
+    // keyword -> crea solo se manca (non distrugge un goal in corso).
+    const resetGoal = isObjective || (stickyOn && isPlain);
     try {
       fs.mkdirSync(goalDir(cwd), { recursive: true });
       const gf = goalFile(cwd, sid);
-      if (isSlash || !fs.existsSync(gf)) fs.writeFileSync(gf, SKELETON, 'utf8');
+      if (resetGoal || !fs.existsSync(gf)) fs.writeFileSync(gf, SKELETON, 'utf8');
     } catch {}
 
-    // --- Memoria del progetto: surfacing + motore sempre attivo ---
-    const memScript = path.join(DANILOV, 'memory.js');
-    const rows = [];
-    // Memoria del progetto.
-    try {
-      const o = execFileSync('node', [memScript, 'plans', '--cwd', cwd], { encoding: 'utf8', timeout: 3000 });
-      const j = JSON.parse(o.trim().split('\n').pop());
-      if (j && j.ok && j.count > 0) {
-        const tot = j.plans.reduce((s, p) => s + (p.events || 0), 0);
-        const top = j.plans.slice(0, 3).map(p => `${p.plan} (${p.events})`).join(', ');
-        rows.push(ui.kv('Memoria', `${tot} event${tot === 1 ? 'o' : 'i'} ${ui.G.dot} ${j.count} pian${j.count === 1 ? 'o' : 'i'}`));
-        rows.push(ui.kv('', `ultimi: ${top}`));
-      } else {
-        rows.push(ui.kv('Memoria', 'nessuna ancora · popolata a fine turno'));
-      }
-    } catch {}
-    // Stato del motore: UP -> la search delega; DOWN -> locale, non usato nel piano.
-    try {
-      const ho = execFileSync('node', [memScript, 'health'], { encoding: 'utf8', timeout: 4000 });
-      const hj = JSON.parse(ho.trim().split('\n').pop());
-      rows.push(ui.kv('Motore', hj && hj.up
-        ? `${ui.dot(true)} UP ${ui.G.dot} delega automatica`
-        : `${ui.dot(false)} DOWN ${ui.G.dot} ricerca locale (memory.js engine up)`));
-    } catch {}
-    rows.push(ui.kv('Cerca', 'memory.js search --query "<tema>"'));
-    rows.push(ui.kv('Tools', 'memory.js tools'));
-    const memNote = '\n' + ui.card(null, rows);
+    const memNote = memorySurface(cwd, isObjective && process.env.DANILOV_AUTO_ENGINE !== '0');
 
-    // Motore sempre attivo: sveglia i container knowagebase in background (best-effort).
-    if (isSlash && process.env.DANILOV_AUTO_ENGINE !== '0') {
-      try { spawn('node', [memScript, 'engine', 'up', '--cwd', cwd], { detached: true, stdio: 'ignore' }).unref(); } catch {}
-    }
+    // /danilov <obiettivo>: il comando slash emette gia' le istruzioni di piano.
+    if (isObjective) { if (memNote) process.stdout.write(memNote.trim()); process.exit(0); }
 
-    // Lo slash command emette gia' le istruzioni: aggiungo solo il surfacing memoria.
-    if (isSlash) { if (memNote) process.stdout.write(memNote.trim()); process.exit(0); }
-
-    process.stdout.write(
-      '[Danilov] Metodo Danilov attivo per questa sessione. ' +
-        'Carica la skill `danilov-prompt` (tool Skill) e applicala in ' +
-        'modalita\' DanilovGoal: INDICE/DEFINIZIONI/RELAZIONI, bit one-hot. ' +
-        'Il goal e\' nello storage di sessione del progetto (gia\' creato): ' +
-        'scrivi il piano con plan.js, marca ogni task con ' +
-        '`node ' + scriptsPath + '/mark.js <bit> OK`, chiudi con ' +
-        '`node ' + scriptsPath + '/validate.js`. Il turno non si chiude ' +
-        'senza goal conforme. In DanilovGoal pensi in @ e relazioni, non in ' +
-        'frasi: ogni evento e\' una relazione "@<azione>: <file> → ' +
-        '<obiettivo> [ <nota> ]" (read/find/plan/edit/new/fix/error/run/test). ' +
-        'Anche le transizioni escono cosi\'. Voce = tool + output script + ' +
-        'righe-evento @. Il pensiero esteso lo affidi al file. ' +
-        '(Per annullare: "annulla danilov".)' + memNote
-    );
+    // keyword o prompt-sticky: nessun comando slash -> le istruzioni le emette l'hook.
+    process.stdout.write(INSTRUCTIONS + memNote);
   } catch {}
 });

@@ -39,9 +39,21 @@ Dal marketplace ufficiale Vascend:
 
 | Comando | Effetto |
 |---|---|
-| `/danilov <obiettivo>` | Attiva tutto il metodo sull'obiettivo: skill + piano + trace + audit deterministico. |
-| `/danilov-clear` | Disattiva la modalità DanilovGoal per la sessione (spegne l'enforcement). |
+| `/danilov on` (o senza argomento) | Attiva la **modalità sticky**: da lì ogni prompt è un obiettivo Danilov, senza riscrivere il comando. |
+| `/danilov off` | Spegne la modalità sticky (enforcement + goal). |
+| `/danilov <obiettivo>` | Esegue un goal **one-shot** sull'obiettivo: skill + piano + trace + audit deterministico. |
+| `/danilov-clear` | Equivale a `/danilov off`. |
 | `/danilov-compact` | Compatta la conversazione in un checkpoint in notazione Danilov (non in prosa). |
+
+### Modalità sticky (on/off)
+
+`/danilov on` mette la sessione in modalità Danilov **persistente**: ogni
+messaggio successivo viene trattato come un obiettivo (pianificato con `plan.js`,
+tracciato, validato) senza dover ripetere il comando. La modalità sopravvive al
+completamento di un obiettivo (a goal conforme lo Stop hook azzera il tracking ma
+mantiene il flag) e anche a uno stallo; si spegne solo con `/danilov off`,
+`/danilov-clear` o "annulla danilov". Il flag di sessione porta `sticky:true` in
+`~/.claude/.danilov-state/<sid>.json`.
 
 ### Hook
 

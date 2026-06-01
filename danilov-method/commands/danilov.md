@@ -1,11 +1,34 @@
 ---
-description: Attiva la skill danilov-prompt in modalita' DanilovGoal completa (bit one-hot + trace append-only + audit boolean deterministico) e la applica alla richiesta passata come argomento. Uso: /danilov <obiettivo>.
-argument-hint: <obiettivo da pianificare/eseguire col metodo Danilov>
+description: Interruttore del metodo Danilov. `/danilov on` (o senza argomento) attiva la modalita' STICKY (ogni prompt diventa un obiettivo Danilov); `/danilov off` la spegne; `/danilov <obiettivo>` esegue un goal one-shot col metodo (bit one-hot + trace firmata + audit deterministico).
+argument-hint: "on | off | <obiettivo>"
 ---
 
 # Comando /danilov
 
-Attiva **tutto** il metodo Danilov in un colpo solo sulla richiesta dell'utente.
+`/danilov` è un **interruttore** del metodo Danilov, più una scorciatoia per un
+obiettivo singolo.
+
+## on / off / obiettivo — cosa fa `$ARGUMENTS`
+
+L'hook `danilov-trigger.js` ha **già** aggiornato lo stato di sessione prima di
+questo turno. In base a `$ARGUMENTS`:
+
+- **`on`** (oppure argomento **vuoto**): la **modalità STICKY** è ora attiva —
+  da adesso **ogni** prompt che l'utente manda è automaticamente un obiettivo
+  Danilov (verrà pianificato, tracciato e validato), senza riscrivere il
+  comando. **NON pianificare nulla ora**: conferma soltanto che la modalità è
+  attiva e che basta scrivere gli obiettivi come messaggi normali; per spegnere,
+  `/danilov off`. **Fermati qui.**
+- **`off`**: la modalità è stata **disattivata** (enforcement + sticky + goal
+  rimossi). Conferma e **fermati qui**.
+- **qualsiasi altro testo** = **obiettivo one-shot**: è la richiesta da eseguire
+  col metodo, adesso, seguendo i passi qui sotto.
+
+Quando in modalità sticky arriva un prompt normale, l'hook inietta da sé le
+istruzioni del metodo: applica gli stessi passi qui sotto trattando quel prompt
+come obiettivo.
+
+Attiva **tutto** il metodo Danilov in un colpo solo sull'obiettivo.
 
 ## File del goal — nello storage di sessione
 

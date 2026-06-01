@@ -75,6 +75,13 @@ process.stdin.on('end', () => {
 
     // Castello ILLUMINATO -> prima del rilascio, chiedi il checkpoint compact.
     if (v && v.conforme) {
+      // STICKY: l'obiettivo e' chiuso ma la modalita' resta accesa per il
+      // prossimo prompt. Niente compact forzato (e' per fine-lavoro): azzera il
+      // tracking conservando active+sticky e lascia terminare.
+      if (flag.sticky) {
+        try { fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: true, cwd: flag.cwd, ts: Date.now() }), 'utf8'); } catch {}
+        process.exit(0);
+      }
       if (!flag.compactAsked) {
         try { fs.writeFileSync(flagFile, JSON.stringify({ ...flag, compactAsked: true }), 'utf8'); } catch {}
         const reason = ui.card(`castello ${ui.G.dot} illuminato ${ui.G.dot} ${v.popcount}`, [
@@ -99,10 +106,16 @@ process.stdin.on('end', () => {
     const stalls = curState > prevState ? 0 : (flag.stalls || 0) + 1;
 
     if (stopActive && stalls >= MAX_STALL) {
-      try { fs.rmSync(flagFile, { force: true }); } catch {}
+      // In STICKY non spegniamo la modalita': rilasciamo solo questo obiettivo
+      // (reset del tracking), pronto per il prossimo prompt. One-shot: rmSync.
+      if (flag.sticky) {
+        try { fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: true, cwd: flag.cwd, ts: Date.now() }), 'utf8'); } catch {}
+      } else {
+        try { fs.rmSync(flagFile, { force: true }); } catch {}
+      }
       console.log(ui.card('castello · in stallo', [
         ui.kv('Stato', `${ui.G.warn} nessuna stanza nuova per ${MAX_STALL} turni`),
-        ui.kv('Azione', 'rilascio l\'enforcement — intervieni a mano'),
+        ui.kv('Azione', flag.sticky ? 'rilascio l\'obiettivo (sticky resta) — intervieni a mano' : 'rilascio l\'enforcement — intervieni a mano'),
       ]));
       process.exit(0);
     }
