@@ -29,7 +29,6 @@ function run(args, extraEnv) {
     return { code: e.status == null ? -1 : e.status, json: parse((e.stdout || '') + '') };
   }
 }
-const DEAD = { DANILOV_ENGINE_URL: 'http://127.0.0.1:59999' }; // motore sicuramente giu'
 function parse(s) { try { return JSON.parse(String(s).trim().split('\n').pop()); } catch { return null; } }
 
 try {
@@ -96,30 +95,35 @@ try {
   const G4 = run(['tools']);
   check('G4 tools elenca comandi', G4.json && Array.isArray(G4.json.tools) && G4.json.tools.length >= 8);
 
-  // H. engine --dry (nessun side-effect)
-  const H1 = run(['engine', 'up', '--dry']);
-  check('H1 engine up --dry docker compose', H1.json && /docker compose .* up -d/.test(H1.json.cmd || ''));
-  const H2 = run(['engine', 'ingest', '--user-id', 'U1', '--project', 'demo', '--dry']);
-  check('H2 engine ingest --dry CLI nativa', H2.json && /scripts\.danilov_memory ingest/.test(H2.json.cmd || ''));
-  const H3 = run(['engine', 'frob', '--dry']);
-  check('H3 engine sub sconosciuto ok=false', H3.json && H3.json.ok === false);
+  // H. engine DISABILITATO (memoria locale .vascend) + health locale
+  const H1 = run(['engine', 'up']);
+  check('H1 engine disabilitato ok=false', H1.json && H1.json.ok === false && H1.json.disabled === true, H1.json && String(H1.json.ok));
+  const H2 = run(['health']);
+  check('H2 health engine=disabled', H2.json && H2.json.ok === true && H2.json.engine === 'disabled', H2.json && String(H2.json.engine));
 
   // I. comando sconosciuto
   const I1 = run(['frobnicate']);
   check('I1 comando sconosciuto ok=false', I1.json && I1.json.ok === false);
   check('I2 comando sconosciuto exit=1', I1.code === 1, String(I1.code));
 
-  // J. health: motore giu' (porta morta) -> up:false
-  const J1 = run(['health', '--force'], DEAD);
-  check('J1 health up=false su porta morta', J1.json && J1.json.up === false, J1.json && String(J1.json.up));
-  check('J2 health riporta url+latency', J1.json && /59999/.test(J1.json.url) && typeof J1.json.latency_ms === 'number');
+  // K. search: SEMPRE locale (nessun motore esterno)
+  const K1 = run(['search', '--query', 'selezione', '--project', 'demo']);
+  check('K1 search source=local', K1.json && K1.json.source === 'local', K1.json && String(K1.json.source));
+  check('K2 search senza engine_up', K1.json && K1.json.engine_up === undefined);
 
-  // K. search gating: AUTO con motore giu' -> local-auto-down; --local -> local-forced
-  const K1 = run(['search', '--query', 'selezione', '--project', 'demo'], DEAD);
-  check('K1 AUTO motore giu -> local-auto-down', K1.json && K1.json.mode === 'local-auto-down', K1.json && K1.json.mode);
-  check('K2 AUTO motore giu -> engine_up false', K1.json && K1.json.engine_up === false);
-  const K2 = run(['search', '--query', 'selezione', '--project', 'demo', '--local']);
-  check('K3 --local -> local-forced (no probe)', K2.json && K2.json.mode === 'local-forced', K2.json && K2.json.mode);
+  // N. formato .vascend a relazioni + export grafo + query strutturata
+  const store = path.join(ENV.DANILOV_MEM_ROOT, 'demo.vascend');
+  const raw = fs.existsSync(store) ? fs.readFileSync(store, 'utf8') : '';
+  check('N1 store .vascend esiste', !!raw, store);
+  check('N2 .vascend ha archi entity>target', /·\s+\w+\s+\S+>\S+/.test(raw));
+  check('N3 .vascend raggruppa per @plan', /@plan\[/.test(raw));
+  const N4 = run(['graph', '--project', 'demo']);
+  check('N4 graph nodes+edges', N4.json && N4.json.ok && N4.json.nodes.length > 0 && N4.json.edges.length > 0, N4.json && JSON.stringify(N4.json.stats));
+  check('N5 graph edge source/target/action', N4.json && N4.json.edges[0].source && N4.json.edges[0].target && !!N4.json.edges[0].action);
+  const N6 = run(['query', '--target', 'selezione', '--project', 'demo']);
+  check('N6 query per target', N6.json && N6.json.ok && N6.json.total >= 1, N6.json && String(N6.json.total));
+  const N7 = run(['add', 'fix parser.py>p7m | asn1crypto', '--project', 'demo', '--plan', 'pv2']);
+  check('N7 add formato v2', N7.json && N7.json.ok === true && N7.json.record.action === 'fix' && N7.json.record.target === 'p7m', N7.json && JSON.stringify(N7.json && N7.json.record));
 
   // L. related: memorie inerenti a un file
   run(['add', '@edit: Widget.tsx → render [ x ]', '--project', 'demo', '--plan', 'p9', '--session', 's9']);

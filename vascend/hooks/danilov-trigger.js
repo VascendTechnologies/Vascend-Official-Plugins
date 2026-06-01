@@ -14,7 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync, spawn } = require('child_process');
+const { execFileSync } = require('child_process');
 
 // Stato runtime (flag di sessione, goal): resta in ~/.claude, per-utente.
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
@@ -37,8 +37,8 @@ const SKELETON = `# DanilovGoal: (in attesa di pianificazione)
 (placeholder)
 `;
 
-// Card di surfacing della memoria del progetto (+ risveglio motore se wake).
-function memorySurface(cwd, wake) {
+// Card di surfacing della memoria LOCALE del progetto (file .vascend a relazioni).
+function memorySurface(cwd) {
   const memScript = path.join(DANILOV, 'memory.js');
   const rows = [];
   try {
@@ -47,24 +47,14 @@ function memorySurface(cwd, wake) {
     if (j && j.ok && j.count > 0) {
       const tot = j.plans.reduce((s, p) => s + (p.events || 0), 0);
       const top = j.plans.slice(0, 3).map(p => `${p.plan} (${p.events})`).join(', ');
-      rows.push(ui.kv('Memoria', `${tot} event${tot === 1 ? 'o' : 'i'} ${ui.G.dot} ${j.count} pian${j.count === 1 ? 'o' : 'i'}`));
+      rows.push(ui.kv('Memoria', `${tot} event${tot === 1 ? 'o' : 'i'} ${ui.G.dot} ${j.count} pian${j.count === 1 ? 'o' : 'i'} ${ui.G.dot} locale .vascend`));
       rows.push(ui.kv('', `ultimi: ${top}`));
     } else {
-      rows.push(ui.kv('Memoria', 'nessuna ancora · popolata a fine turno'));
+      rows.push(ui.kv('Memoria', 'nessuna ancora · popolata a fine turno (.vascend locale)'));
     }
   } catch {}
-  try {
-    const ho = execFileSync('node', [memScript, 'health'], { encoding: 'utf8', timeout: 4000 });
-    const hj = JSON.parse(ho.trim().split('\n').pop());
-    rows.push(ui.kv('Motore', hj && hj.up
-      ? `${ui.dot(true)} UP ${ui.G.dot} delega automatica`
-      : `${ui.dot(false)} DOWN ${ui.G.dot} ricerca locale (memory.js engine up)`));
-  } catch {}
   rows.push(ui.kv('Cerca', 'memory.js search --query "<tema>"'));
-  rows.push(ui.kv('Tools', 'memory.js tools'));
-  if (wake && process.env.DANILOV_AUTO_ENGINE !== '0') {
-    try { spawn('node', [memScript, 'engine', 'up', '--cwd', cwd], { detached: true, stdio: 'ignore' }).unref(); } catch {}
-  }
+  rows.push(ui.kv('Grafo', 'memory.js query <filtri> · memory.js graph (node-link JSON)'));
   return '\n' + ui.card(null, rows);
 }
 
@@ -148,7 +138,7 @@ process.stdin.on('end', () => {
         fs.mkdirSync(STATE_DIR, { recursive: true });
         fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: true, cwd, ts: Date.now() }), 'utf8');
       } catch {}
-      const note = memorySurface(cwd, process.env.DANILOV_AUTO_ENGINE !== '0');
+      const note = memorySurface(cwd);
       process.stdout.write(('[Vascend] Modalita\' Vascend STICKY ATTIVA: da ora OGNI prompt e\' un ' +
         'obiettivo Danilov (pianifica, marca, valida) senza riscrivere il comando. ' +
         'Per spegnere: /vascend off.' + (note || '')).trim());
@@ -175,7 +165,7 @@ process.stdin.on('end', () => {
       if (resetGoal || !fs.existsSync(gf)) fs.writeFileSync(gf, SKELETON, 'utf8');
     } catch {}
 
-    const memNote = memorySurface(cwd, isObjective && process.env.DANILOV_AUTO_ENGINE !== '0');
+    const memNote = memorySurface(cwd);
 
     // /vascend <obiettivo>: il comando slash emette gia' le istruzioni di piano.
     if (isObjective) { if (memNote) process.stdout.write(memNote.trim()); process.exit(0); }
