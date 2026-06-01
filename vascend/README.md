@@ -1,8 +1,8 @@
-# Danilov Method — plugin per Claude Code
+# Vascend — plugin per Claude Code (metodo Danilov)
 
-Il **metodo Danilov** pacchettizzato come plugin Claude Code: una skill, tre
-comandi, cinque hook e un motore di stato a **zero dipendenze** (solo i moduli
-built-in di Node).
+**Vascend** pacchettizza il **metodo Danilov** come plugin Claude Code: una
+skill, tre comandi (`/vascend`, `/vascend-clear`, `/vascend-compact`), cinque
+hook e un motore di stato a **zero dipendenze** (solo i moduli built-in di Node).
 
 Due livelli, un'unica notazione:
 
@@ -24,7 +24,7 @@ Dal marketplace ufficiale Vascend:
 
 ```
 /plugin marketplace add VascendTechnologies/Vascend-Official-Plugins
-/plugin install danilov-method@vascend-official-plugins
+/plugin install vascend@vascend-official-plugins
 ```
 
 ## Componenti
@@ -32,34 +32,34 @@ Dal marketplace ufficiale Vascend:
 ### Skill
 
 - **`danilov-prompt`** — costruisce prompt strutturati e applica la modalità
-  DanilovGoal. Si attiva da sola sui trigger del metodo, oppure via `/danilov`.
+  DanilovGoal. Si attiva da sola sui trigger del metodo, oppure via `/vascend`.
   In `references/`: esempi completi e l'eval sull'encoding invisibile.
 
 ### Comandi
 
 | Comando | Effetto |
 |---|---|
-| `/danilov on` (o senza argomento) | Attiva la **modalità sticky**: da lì ogni prompt è un obiettivo Danilov, senza riscrivere il comando. |
-| `/danilov off` | Spegne la modalità sticky (enforcement + goal). |
-| `/danilov <obiettivo>` | Esegue un goal **one-shot** sull'obiettivo: skill + piano + trace + audit deterministico. |
-| `/danilov-clear` | Equivale a `/danilov off`. |
-| `/danilov-compact` | Compatta la conversazione in un checkpoint in notazione Danilov (non in prosa). |
+| `/vascend on` (o senza argomento) | Attiva la **modalità sticky**: da lì ogni prompt è un obiettivo Danilov, senza riscrivere il comando. |
+| `/vascend off` | Spegne la modalità sticky (enforcement + goal). |
+| `/vascend <obiettivo>` | Esegue un goal **one-shot** sull'obiettivo: skill + piano + trace + audit deterministico. |
+| `/vascend-clear` | Equivale a `/vascend off`. |
+| `/vascend-compact` | Compatta la conversazione in un checkpoint in notazione Danilov (non in prosa), lo salva in `.vascend-compact.md`, poi invita a `/clear` per ripartire pulito. |
 
 ### Modalità sticky (on/off)
 
-`/danilov on` mette la sessione in modalità Danilov **persistente**: ogni
+`/vascend on` mette la sessione in modalità Vascend **persistente**: ogni
 messaggio successivo viene trattato come un obiettivo (pianificato con `plan.js`,
 tracciato, validato) senza dover ripetere il comando. La modalità sopravvive al
 completamento di un obiettivo (a goal conforme lo Stop hook azzera il tracking ma
-mantiene il flag) e anche a uno stallo; si spegne solo con `/danilov off`,
-`/danilov-clear` o "annulla danilov". Il flag di sessione porta `sticky:true` in
+mantiene il flag) e anche a uno stallo; si spegne solo con `/vascend off`,
+`/vascend-clear` o "annulla vascend". Il flag di sessione porta `sticky:true` in
 `~/.claude/.danilov-state/<sid>.json`.
 
 ### Hook
 
 | Hook | Evento | Ruolo |
 |---|---|---|
-| `danilov-trigger.js` | UserPromptSubmit | Rileva `/danilov` o le keyword del metodo; alza il flag di sessione e crea lo scheletro del goal. |
+| `danilov-trigger.js` | UserPromptSubmit | Rileva `/vascend` o le keyword del metodo; alza il flag di sessione e crea lo scheletro del goal. |
 | `danilov-protect.js` | PreToolUse (Edit/Write/MultiEdit) | Nega le modifiche manuali ai file `DanilovGoal/` (anti-manomissione). |
 | `danilov-goal-audit.js` | Stop | Enforcement: blocca la chiusura del turno finché il goal non è conforme; anti-stallo dopo N turni. |
 | `danilov-memory-file.js` | PostToolUse (Read/Edit/Write/MultiEdit) | Fa emergere le memorie Danilov inerenti al file toccato. |
@@ -76,7 +76,7 @@ divergere sul verdetto:
 - `ui.js` — rendering delle card nei messaggi degli hook.
 - `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano, accende un bit (`--dry` per l'anteprima), emette il verdetto (`--deep` valida anche i sotto-piani).
 - `unmark.js` — annulla una marcatura sbagliata: appende una riga `UNDO` firmata che spegne il bit (append-only, tracciato).
-- `mode.js` — interruttore della modalità (`on`/`off`/`status`): scrive il flag sticky in modo deterministico; lo invoca il comando `/danilov on|off`.
+- `mode.js` — interruttore della modalità (`on`/`off`/`status`): scrive il flag sticky in modo deterministico; lo invoca il comando `/vascend on|off`.
 - `subplan.js` — crea un sotto-piano di micro-task legato a un macro-task del master.
 - `status.js` — vista dello stato del goal (`--pretty` albero macro/micro, `--todo` JSON per la todo nativa).
 - `memory.js` — catalogo di memoria persistente (ricerca BM25 + RRF, offline).
@@ -84,7 +84,7 @@ divergere sul verdetto:
 
 ### Todo list nativa
 
-Durante un `/danilov`, gli obiettivi del goal vengono specchiati nella **todo
+Durante un `/vascend`, gli obiettivi del goal vengono specchiati nella **todo
 list nativa** dell'harness (TaskCreate/TodoWrite): un task per ogni stanza, con
 lo stato derivato dalla Trace firmata (`completed` per i bit accesi, la prima
 stanza al buio `in_progress`, le altre `pending`). La fonte è deterministica:
@@ -117,7 +117,7 @@ accanto al master): nessuna modifica al master, nessuna violazione del protect
 hook. I macro-task senza sotto-piano restano atomici (comportamento invariato).
 Rigenerare il master con `plan.js` **invalida e rimuove** i sotto-piani della
 sessione precedente, così non si riagganciano per naming ai nuovi macro-bit.
-Il comando `/danilov` può delegare la progettazione dei sotto-piani a più
+Il comando `/vascend` può delegare la progettazione dei sotto-piani a più
 sotto-agenti in parallelo, poi seguirli con `mark.js`/`status.js`.
 
 ### Annullare e confermare (contro gli errori di marcatura)

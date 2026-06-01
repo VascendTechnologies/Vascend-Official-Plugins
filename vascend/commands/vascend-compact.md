@@ -1,17 +1,20 @@
 ---
-description: Compatta strategicamente la conversazione in un sommario nel formato del metodo Danilov (INDICE/DEFINIZIONI/RELAZIONI) invece che in prosa. Produce un checkpoint denso e riprendibile dello stato attuale.
+description: Compatta la conversazione in un checkpoint nel formato del metodo Danilov (INDICE/DEFINIZIONI/RELAZIONI) invece che in prosa, lo salva in .vascend-compact.md, poi invita a /clear per ripartire con contesto pulito.
 ---
 
-# Comando /danilov-compact
+# Comando /vascend-compact
 
 Comprimi lo stato della conversazione come fa un compact, ma il sommario è
 in **notazione Danilov**, non in prosa. È la pianta del castello finora:
-quali stanze sono illuminate, quali restano aperte.
+quali stanze sono illuminate, quali restano aperte. Subito dopo il salvataggio
+si riparte puliti con `/clear`.
 
-Nota: un comando non può invocare il `/compact` nativo del CLI. Questo
-genera il **sommario compatto** in formato Danilov — la parte che conta — e
-lo salva come checkpoint. Per liberare davvero il contesto, dopo puoi usare
-`/clear` (o il resume) ripartendo da questo checkpoint.
+> **Limite tecnico (verificato).** Un comando di Claude Code NON può lanciare
+> `/clear` (né `/compact`) in automatico: l'output di un comando è testo per il
+> modello, non viene re-interpretato come slash-command, e nessun hook/tool può
+> svuotare il contesto. Quindi questo comando fa la parte che conta —
+> **genera e salva il checkpoint Danilov** — e poi **ti invita esplicitamente a
+> digitare `/clear`**: è un solo tasto e riparti dal checkpoint appena salvato.
 
 ## Cosa produrre
 
@@ -55,9 +58,23 @@ OUTPUT: stato compatto della sessione, pronto a riprendere a freddo.
 Dopo aver prodotto il blocco, salvalo (tool Write) in:
 
 ```
-<cwd>/.danilov-compact.md
+<cwd>/.vascend-compact.md
 ```
 
 (nella root del progetto, fuori da `DanilovGoal/` quindi scrivibile). Se
-esiste già, sovrascrivilo: è sempre l'ultima foto dello stato. In chat
-restituisci SOLO il blocco Danilov + la riga `saved: .danilov-compact.md`.
+esiste già, sovrascrivilo: è sempre l'ultima foto dello stato.
+
+## Chiusura: invito a /clear
+
+In chat restituisci, in quest'ordine e SENZA altra prosa:
+
+1. il blocco Danilov;
+2. la riga `saved: .vascend-compact.md`;
+3. come **ultima riga**, l'invito a pulire il contesto, ben visibile:
+
+```
+Checkpoint salvato. Per ripartire con contesto pulito digita ora:  /clear
+(il prossimo /vascend riprenderà da .vascend-compact.md)
+```
+
+Non aggiungere altro dopo questa riga: è il passo che l'utente deve compiere.

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Interruttore deterministico della modalita' Danilov per la sessione corrente.
+// Interruttore deterministico della modalita' Vascend per la sessione corrente.
 // Scrive/azzera il flag ~/.claude/.danilov-state/<sid>.json. Pensato per essere
-// invocato DAL COMANDO /danilov (dove l'argomento on|off e' certo), non dagli
+// invocato DAL COMANDO /vascend (dove l'argomento on|off e' certo), non dagli
 // hook (che ricevono il prompt espanso e non possono distinguere on/off in modo
 // affidabile).
 //
@@ -29,19 +29,19 @@ if (cmd === 'on') {
     fs.mkdirSync(STATE_DIR, { recursive: true });
     fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: true, cwd: process.cwd(), ts }), 'utf8');
   } catch (e) { console.error('errore scrittura flag: ' + e.message); process.exit(1); }
-  console.log('Danilov STICKY ON · ogni prompt e\' un obiettivo Danilov (off: /danilov off)');
+  console.log('Vascend STICKY ON · ogni prompt e\' un obiettivo Danilov (off: /vascend off)');
   process.exit(0);
 }
 
 if (cmd === 'off') {
   try { fs.rmSync(flagFile, { force: true }); } catch {}
   try { fs.rmSync(goalFile(process.cwd(), sid), { force: true }); } catch {}
-  console.log('Danilov OFF · modalita\' disattivata per questa sessione');
+  console.log('Vascend OFF · modalita\' disattivata per questa sessione');
   process.exit(0);
 }
 
 // status
 const f = readFlag();
-if (f && f.active) console.log(`Danilov ${f.sticky ? 'STICKY ON' : 'ON (one-shot)'} · sid ${sid}`);
-else console.log(`Danilov OFF · sid ${sid}`);
+if (f && f.active) console.log(`Vascend ${f.sticky ? 'STICKY ON' : 'ON (one-shot)'} · sid ${sid}`);
+else console.log(`Vascend OFF · sid ${sid}`);
 process.exit(0);

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// UserPromptSubmit Hook: attivazione del metodo Danilov.
-//  - `/danilov on` (o `/danilov` senza argomento)  -> MODALITA' STICKY: da quel
+// UserPromptSubmit Hook: attivazione del metodo Danilov (comando /vascend).
+//  - `/vascend on` (o `/vascend` senza argomento)  -> MODALITA' STICKY: da quel
 //    momento OGNI prompt e' un obiettivo Danilov, senza riscrivere il comando.
-//  - `/danilov off` / `/danilov-clear` / "annulla danilov" -> spegne tutto.
-//  - `/danilov <obiettivo>`  -> obiettivo one-shot (non sticky).
+//  - `/vascend off` / `/vascend-clear` / "annulla vascend" -> spegne tutto.
+//  - `/vascend <obiettivo>`  -> obiettivo one-shot (non sticky).
+//  (riconosce anche i vecchi alias /danilov* per transizione.)
 //  - keyword del metodo      -> attiva su quel prompt.
 // In tutti i casi attivi: alza il flag di sessione (~/.claude/.danilov-state/
 // <sid>.json, con `sticky` se in modalita') e crea/azzera lo scheletro del goal
@@ -68,7 +69,7 @@ function memorySurface(cwd, wake) {
 }
 
 const INSTRUCTIONS =
-  '[Danilov] Metodo Danilov attivo. Carica la skill `danilov-prompt` (tool ' +
+  '[Vascend] Modalita\' Vascend attiva (metodo Danilov). Carica la skill `danilov-prompt` (tool ' +
   'Skill) e applicala in modalita\' DanilovGoal: INDICE/DEFINIZIONI/RELAZIONI, ' +
   'bit one-hot. Il goal e\' nello storage di sessione del progetto (gia\' ' +
   'creato): scrivi il piano con `node ' + scriptsPath + '/plan.js`, marca ogni ' +
@@ -92,13 +93,13 @@ process.stdin.on('end', () => {
     const cwd = data.cwd || process.cwd();
     const flagFile = path.join(STATE_DIR, `${sid}.json`);
 
-    // Quando si invoca lo slash command /danilov, l'hook riceve l'ESPANSIONE
-    // del comando (il suo markdown), non "/danilov on". Il comando si gestisce
+    // Quando si invoca lo slash command /vascend, l'hook riceve l'ESPANSIONE
+    // del comando (il suo markdown), non "/vascend on". Il comando si gestisce
     // da se' (on/off via mode.js, obiettivo via plan.js): l'hook NON deve
     // interferire (niente flag/goal spuri). Riconosci l'espansione e fai
-    // pass-through. (/danilov-clear e /danilov-compact hanno blob diversi e
+    // pass-through. (/vascend-clear e /vascend-compact hanno blob diversi e
     // proseguono normalmente.)
-    if (/^#\s*Comando\s+\/danilov\b/m.test(prompt) || /##\s*on\s*\/\s*off\s*\/\s*obiettivo/i.test(prompt)) {
+    if (/^#\s*Comando\s+\/(?:danilov|vascend)\b/m.test(prompt) || /##\s*on\s*\/\s*off\s*\/\s*obiettivo/i.test(prompt)) {
       process.exit(0);
     }
 
@@ -108,17 +109,17 @@ process.stdin.on('end', () => {
     const stickyOn = !!(curFlag && curFlag.sticky);
 
     // Comando slash e suo argomento (on|off|<obiettivo>).
-    const slash = prompt.match(/^\s*\/danilov\b[ \t]*(.*)$/i);
+    const slash = prompt.match(/^\s*\/(?:danilov|vascend)\b[ \t]*(.*)$/i);
     const slashArg = slash ? slash[1].trim().toLowerCase() : null;
 
-    // OFF prima di tutto: /danilov-clear, /danilov off, "annulla|disattiva|stop danilov".
+    // OFF prima di tutto: /vascend-clear, /vascend off, "annulla|disattiva|stop vascend".
     const isOff =
-      /^\s*\/danilov[-\s]+clear\b/i.test(prompt) ||
-      /\b(annulla|disattiva|stop)\s+danilov\b/i.test(prompt) ||
+      /^\s*\/(?:danilov|vascend)[-\s]+clear\b/i.test(prompt) ||
+      /\b(annulla|disattiva|stop)\s+(?:danilov|vascend)\b/i.test(prompt) ||
       (!!slash && /^off\b/.test(slashArg));
-    // ON: /danilov on  oppure  /danilov senza argomento -> interruttore sticky.
+    // ON: /vascend on  oppure  /vascend senza argomento -> interruttore sticky.
     const isOn = !isOff && !!slash && (slashArg === '' || /^on\b/.test(slashArg));
-    // Obiettivo one-shot: /danilov <testo> (diverso da on/off).
+    // Obiettivo one-shot: /vascend <testo> (diverso da on/off).
     const isObjective = !isOff && !isOn && !!slash;
 
     const TRIGGERS = [
@@ -137,7 +138,7 @@ process.stdin.on('end', () => {
     if (isOff) {
       try { fs.rmSync(flagFile, { force: true }); } catch {}
       try { fs.rmSync(goalFile(cwd, sid), { force: true }); } catch {}
-      process.stdout.write('[Danilov] Modalita\' DanilovGoal disattivata (sticky OFF) per questa sessione.');
+      process.stdout.write('[Vascend] Modalita\' Vascend disattivata (sticky OFF) per questa sessione.');
       return;
     }
 
@@ -148,9 +149,9 @@ process.stdin.on('end', () => {
         fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: true, cwd, ts: Date.now() }), 'utf8');
       } catch {}
       const note = memorySurface(cwd, process.env.DANILOV_AUTO_ENGINE !== '0');
-      process.stdout.write(('[Danilov] Modalita\' DanilovGoal STICKY ATTIVA: da ora OGNI prompt e\' un ' +
+      process.stdout.write(('[Vascend] Modalita\' Vascend STICKY ATTIVA: da ora OGNI prompt e\' un ' +
         'obiettivo Danilov (pianifica, marca, valida) senza riscrivere il comando. ' +
-        'Per spegnere: /danilov off.' + (note || '')).trim());
+        'Per spegnere: /vascend off.' + (note || '')).trim());
       return;
     }
 
@@ -176,7 +177,7 @@ process.stdin.on('end', () => {
 
     const memNote = memorySurface(cwd, isObjective && process.env.DANILOV_AUTO_ENGINE !== '0');
 
-    // /danilov <obiettivo>: il comando slash emette gia' le istruzioni di piano.
+    // /vascend <obiettivo>: il comando slash emette gia' le istruzioni di piano.
     if (isObjective) { if (memNote) process.stdout.write(memNote.trim()); process.exit(0); }
 
     // keyword o prompt-sticky: nessun comando slash -> le istruzioni le emette l'hook.

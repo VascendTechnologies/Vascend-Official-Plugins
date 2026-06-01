@@ -8,9 +8,9 @@
   },
   "plugins": [
     {
-      "name": "danilov-method",
-      "source": "./danilov-method",
-      "description": "Metodo Danilov: prompt strutturati INDICE/DEFINIZIONI/RELAZIONI + esecuzione DanilovGoal tracciata a bit one-hot con Trace firmata HMAC e verdetto deterministico."
+      "name": "vascend",
+      "source": "./vascend",
+      "description": "Vascend: metodo Danilov per Claude Code. Prompt strutturati INDICE/DEFINIZIONI/RELAZIONI + esecuzione DanilovGoal tracciata a bit one-hot con Trace firmata HMAC e verdetto deterministico. Comandi /vascend, /vascend-clear, /vascend-compact."
     }
   ]
 }
