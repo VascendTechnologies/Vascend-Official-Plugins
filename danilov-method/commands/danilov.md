@@ -79,6 +79,46 @@ script `plan.js`, `mark.js`, `validate.js`. Le righe di Trace sono firmate
    Se restano task in `missing`/FAIL, rifai l'azione + `mark.js` e ri-valida.
    A castello illuminato, porta tutti i task nativi a `completed`.
 
+## Piani gerarchici (macro-task con sotto-piani di micro-task)
+
+Per obiettivi grossi, un piano piatto non basta: usa **due livelli**. Il
+master contiene i **macro-task** (i suoi bit); ogni macro-task può avere un
+**sotto-piano** con i propri **micro-task**. Un macro-task si illumina SOLO
+quando il suo sotto-piano è completo — il **roll-up** è garantito da `mark.js`,
+non dalle tue parole.
+
+1. **Master** come sopra (`plan.js` coi macro-task `T01..TNN`).
+2. **Sotto-piano** per un macro-task complesso (`<macroBit>` 0-based, `T01 -> 0`):
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/subplan.js <macroBit> "<titolo sub>" "t01: micro" "t02: micro" ...
+   ```
+   crea `sid.sub<macroBit>.md` (relazione master↔sub implicita nel naming).
+3. **Progettazione parallela con 3 sotto-agenti** (opzionale, consigliato per
+   piani ampi): dopo aver creato il master, lancia **in parallelo** (Agent tool,
+   una sola risposta con più tool-call) un sotto-agente per macro-task. A
+   ciascuno passa un **brief numerico Danilov** del suo macro-task; ognuno
+   restituisce la lista di micro-task `t01..`. Poi TU crei i sotto-piani con
+   `subplan.js` (gli script li tocchi solo tu, mai i sotto-agenti).
+4. **Esecuzione gerarchica**, in ordine di macro-bit:
+   - accendi i micro del sotto-piano (passa il FILE del sub):
+     ```
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mark.js <sub.md> <microBit> OK
+     ```
+   - quando il sotto-piano è completo, accendi il macro sul master:
+     ```
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mark.js <macroBit> OK
+     ```
+     `mark.js` **rifiuta** se il sotto-piano non è conforme (roll-up negato).
+   - un macro-task **senza** sotto-piano si accende direttamente (atomico).
+5. **Vista e verdetto gerarchici**:
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --pretty   # albero macro -> micro
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --todo      # todo nativa con micro indentati
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/validate.js --deep    # master + ogni sub + coerenza roll-up
+   ```
+   Specchia nella todo nativa anche i micro (`status.js --todo` li emette già
+   indentati): l'utente vede l'intero albero degli obiettivi.
+
 ## Come comunichi in chat
 
 In DanilovGoal pensi in relazioni, non in frasi. Ogni evento è una relazione

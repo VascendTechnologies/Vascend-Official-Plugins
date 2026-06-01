@@ -2,12 +2,13 @@
 // Vista di stato del DanilovGoal di sessione — sorgente per la "todo nativa".
 // Legge il goal (piano + Trace firmata), ricava per ogni task se e' acceso
 // (done), fallito (fail) o ancora al buio, marca il prossimo da fare (next) e
-// stampa la lista. Pensato per popolare la todo list nativa dell'harness:
+// stampa la lista. Se un macro-task ha un SOTTO-PIANO (sid.sub<bit>.md), espande
+// i suoi micro-task come albero. Pensato per la todo list nativa dell'harness:
 //
 //   node status.js            -> JSON {ok, plan, state, target, validate, tasks:[...]}
 //   node status.js --todo     -> JSON {ok, todos:[{content,status,activeForm}]}
-//                                (status ∈ pending|in_progress|completed)
-//   node status.js --pretty   -> checklist testuale [x]/[ ] per la chat
+//                                (macro + micro indentati; status ∈ pending|in_progress|completed)
+//   node status.js --pretty   -> albero testuale [x]/[ ] (macro -> micro) per la chat
 //
 // Il verdetto resta di validate.js: questo script NON lo emette, riflette solo
 // lo stato corrente. Fonte unica = core.js (stessa matematica del validatore).
@@ -15,11 +16,10 @@
 
 const fs = require('fs');
 const { computeVerdict, hex, taskLabel } = require('./core.js');
-const { goalFile } = require('./session.js');
+const { goalFile, subGoalFile } = require('./session.js');
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(`--${name}`);
-// File: primo positional non-flag, altrimenti il goal di sessione.
 const file = argv.find(a => !a.startsWith('--')) || goalFile(process.cwd());
 
 function out(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
@@ -30,9 +30,8 @@ if (!file || !fs.existsSync(file)) {
 }
 
 const text = fs.readFileSync(file, 'utf8');
-
-// Titolo del piano.
-const title = (text.match(/^#\s*DanilovGoal:\s*(.+)$/m) || [])[1] || '(senza titolo)';
+// Titolo: master "# DanilovGoal:" o sub "# DanilovGoal[sub]:".
+const title = (text.match(/^#\s*DanilovGoal(?:\[sub\])?:\s*(.+)$/m) || [])[1] || '(senza titolo)';
 
 // Task dichiarati: dal blocco "## 1. Pianificazione" fino a "## 2. Trace".
 // Righe piano = | bit | mask | task | (3 celle). La Trace ha 7 celle: esclusa.
@@ -43,47 +42,75 @@ function planTasks(src) {
   const tasks = [];
   for (const line of block.split('\n')) {
     const cells = line.split('|').map(c => c.trim());
-    if (cells.length !== 5) continue;            // non e' una riga a 3 celle
+    if (cells.length !== 5) continue;
     const bit = parseInt(cells[1], 10);
-    if (!Number.isInteger(bit)) continue;        // header/separatore
+    if (!Number.isInteger(bit)) continue;
     tasks.push({ bit, mask: (1 << bit) >>> 0, desc: cells[3] });
   }
   return tasks.sort((a, b) => a.bit - b.bit);
 }
 
+// Righe di stato di un singolo piano (master o sub), senza ricorsione.
+function rowsOf(src, verdict) {
+  const tasks = planTasks(src);
+  const nextBit = tasks.find(t => (verdict.state & t.mask) === 0);
+  const nextNum = nextBit ? nextBit.bit : -1;
+  return tasks.map(t => {
+    const done = (verdict.state & t.mask) !== 0;
+    const fail = (verdict.failBits & t.mask) !== 0;
+    const status = done ? 'completed' : (t.bit === nextNum ? 'in_progress' : 'pending');
+    return { bit: t.bit, task: taskLabel(t.bit), mask: hex(t.mask), desc: t.desc, done, fail, status };
+  });
+}
+
 const v = computeVerdict(text);
-const tasks = planTasks(text);
+const rows = rowsOf(text, v);
 
-// Prossima stanza al buio (bit piu' basso non acceso): unica "in_progress".
-const nextBit = tasks.find(t => (v.state & t.mask) === 0);
-const nextBitNum = nextBit ? nextBit.bit : -1;
-
-const rows = tasks.map(t => {
-  const done = (v.state & t.mask) !== 0;
-  const fail = (v.failBits & t.mask) !== 0;
-  const status = done ? 'completed' : (t.bit === nextBitNum ? 'in_progress' : 'pending');
-  return { bit: t.bit, task: taskLabel(t.bit), mask: hex(t.mask), desc: t.desc, done, fail, status };
-});
+// Espansione gerarchica: per ogni macro-task con sotto-piano, allega i micro.
+for (const r of rows) {
+  const sub = subGoalFile(process.cwd(), undefined, r.bit);
+  if (!fs.existsSync(sub)) continue;
+  const subText = fs.readFileSync(sub, 'utf8');
+  const sv = computeVerdict(subText);
+  r.sub = {
+    title: (subText.match(/^#\s*DanilovGoal(?:\[sub\])?:\s*(.+)$/m) || [])[1] || '',
+    popcount: sv.popcount,
+    validate: sv.validate,
+    micro: rowsOf(subText, sv),
+  };
+}
 
 if (flag('todo')) {
-  // Formato pronto per la todo nativa (TaskCreate/TodoWrite).
-  out({
-    ok: true,
-    plan: title,
-    todos: rows.map(r => ({
-      content: r.desc,
+  const todos = [];
+  for (const r of rows) {
+    todos.push({
+      content: r.sub ? `${r.desc}  (sub ${r.sub.popcount})` : r.desc,
       status: r.status,
       activeForm: r.desc.replace(/^(T\d+):\s*/, 'In corso $1: '),
-    })),
-  });
+    });
+    if (r.sub) for (const m of r.sub.micro) {
+      todos.push({
+        content: `    ↳ ${m.desc}`,
+        status: m.status,
+        activeForm: `In corso ${m.desc}`,
+      });
+    }
+  }
+  out({ ok: true, plan: title, todos });
   process.exit(0);
 }
 
 if (flag('pretty')) {
-  const mark = r => r.done ? '[x]' : (r.fail ? '[!]' : '[ ]');
-  const arrow = r => r.status === 'in_progress' ? '  <- prossima' : '';
-  const lines = [`DanilovGoal: ${title}  (${v.popcount})`];
-  for (const r of rows) lines.push(`${mark(r)} ${r.task} ${r.mask}  ${r.desc}${arrow(r)}`);
+  const mk = r => r.done ? '[x]' : (r.fail ? '[!]' : '[ ]');
+  const arr = r => r.status === 'in_progress' ? '  <- prossima' : '';
+  const lines = [`DanilovGoal: ${title}  (master ${v.popcount})`];
+  for (const r of rows) {
+    lines.push(`${mk(r)} ${r.task} ${r.mask}  ${r.desc}${arr(r)}`);
+    if (r.sub) {
+      lines.push(`      sub ${r.sub.popcount} [${r.task}]: ${r.sub.title}`);
+      for (const m of r.sub.micro) lines.push(`      ${mk(m)} ${m.task} ${m.mask}  ${m.desc}${arr(m)}`);
+    }
+  }
   lines.push(`validate(state) = ${v.validate === true ? 'TRUE' : 'FALSE'}  (lo emette validate.js)`);
   process.stdout.write(lines.join('\n') + '\n');
   process.exit(0);
@@ -96,6 +123,5 @@ out({
   target: v.target != null ? hex(v.target) : null,
   validate: v.validate,
   popcount: v.popcount,
-  nextBit: nextBitNum,
   tasks: rows,
 });

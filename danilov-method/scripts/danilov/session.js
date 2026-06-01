@@ -42,6 +42,29 @@ function goalFile(cwd, sessionId) {
   return path.join(goalDir(cwd), `${sid || 'no-session'}.md`);
 }
 
+// Sotto-piano (sub-goal) di un macro-bit del master. La relazione master->sub
+// e' IMPLICITA nel naming: <sid>.sub<macroBit>.md, accanto al master <sid>.md.
+// Cosi' non serve toccare il master (che il protect hook protegge): scoprire i
+// sub e' una scansione di directory, non una modifica.
+function subGoalFile(cwd, sessionId, macroBit) {
+  const sid = currentSessionId(sessionId) || 'no-session';
+  return path.join(goalDir(cwd), `${sid}.sub${macroBit}.md`);
+}
+
+// Elenca i sotto-piani esistenti del master di sessione: [{macroBit, file}],
+// ordinati per macroBit. Vuoto se non ce ne sono o la dir non esiste.
+function listSubGoals(cwd, sessionId) {
+  const sid = currentSessionId(sessionId) || 'no-session';
+  const dir = goalDir(cwd);
+  const re = new RegExp(`^${sid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.sub(\\d+)\\.md$`);
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  return names
+    .map(n => { const m = re.exec(n); return m ? { macroBit: parseInt(m[1], 10), file: path.join(dir, n) } : null; })
+    .filter(Boolean)
+    .sort((a, b) => a.macroBit - b.macroBit);
+}
+
 // sessionId: di solito input.session_id; fallback env.
 function isDanilovActive(sessionId) {
   const sid = currentSessionId(sessionId);
@@ -56,4 +79,4 @@ function isDanilovActive(sessionId) {
   }
 }
 
-module.exports = { isDanilovActive, goalDir, goalFile, encodeCwd, currentSessionId, CLAUDE_DIR };
+module.exports = { isDanilovActive, goalDir, goalFile, subGoalFile, listSubGoals, encodeCwd, currentSessionId, CLAUDE_DIR };

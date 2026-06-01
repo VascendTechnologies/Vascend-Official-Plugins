@@ -12,8 +12,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { deriveState, hex, taskLabel } = require('./core.js');
-const { goalFile } = require('./session.js');
+const { deriveState, computeVerdict, hex, taskLabel } = require('./core.js');
+const { goalFile, subGoalFile } = require('./session.js');
 const { signRow } = require('./crypto.js');
 
 // Se il primo arg e' un bit (numero), si usa il file canonico.
@@ -67,6 +67,26 @@ if (tampered) {
 if (pre & mask) {
   console.log(`gia' marcato ${taskLabel(bit)} ${hex(mask)} | state ${hex(pre)} (nessuna modifica)`);
   process.exit(3);
+}
+
+// Roll-up gerarchico: se questo file e' il MASTER e il macro-bit ha un
+// sotto-piano (scoperto per naming), il macro-task si accende SOLO quando il
+// sub-goal e' conforme (tutti i micro accesi, nessuna incoerenza). Senza
+// sotto-piano il macro-task e' atomico (comportamento invariato). Solo per OK.
+if (esito === 'OK' && path.resolve(file) === path.resolve(goalFile(process.cwd()))) {
+  const sub = subGoalFile(process.cwd(), undefined, bit);
+  if (fs.existsSync(sub)) {
+    const sv = computeVerdict(fs.readFileSync(sub, 'utf8'));
+    if (!sv.conforme) {
+      console.error(`roll-up negato: il sotto-piano di ${taskLabel(bit)} non e' completo (${sv.popcount}).`);
+      if (sv.missingTasks && sv.missingTasks.length)
+        console.error('  micro al buio: ' + sv.missingTasks.map(t => `${t.task} (${hex(t.mask)})`).join(', '));
+      if (sv.inconsistencies && sv.inconsistencies.length)
+        console.error('  incoerenze sub: ' + sv.inconsistencies.join('; '));
+      console.error('  completa i micro-task del sub, poi riaccendi il macro.');
+      process.exit(1);
+    }
+  }
 }
 
 const post = esito === 'OK' ? (pre | mask) >>> 0 : pre;
