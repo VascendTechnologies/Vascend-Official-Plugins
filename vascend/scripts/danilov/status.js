@@ -42,24 +42,44 @@ function planTasks(src) {
   const tasks = [];
   for (const line of block.split('\n')) {
     const cells = line.split('|').map(c => c.trim());
-    if (cells.length !== 5) continue;
+    // 3 colonne (len 5) o 4 con dep (len 6): la Trace ha >=7 celle, esclusa.
+    if (cells.length !== 5 && cells.length !== 6) continue;
     const bit = parseInt(cells[1], 10);
     if (!Number.isInteger(bit)) continue;
-    tasks.push({ bit, mask: (1 << bit) >>> 0, desc: cells[3] });
+    const dep = cells.length === 6 && cells[4] && cells[4] !== '-' ? cells[4] : '';
+    tasks.push({ bit, mask: (1 << bit) >>> 0, desc: cells[3], dep });
   }
   return tasks.sort((a, b) => a.bit - b.bit);
+}
+
+// Note per-bit dalla Trace: riga estesa | ts|bit|mask|pre|post|esito|sig|nota |
+// (split length 10). La colonna nota (cells[8]) e' fuori dalla firma; l'ultima
+// nota scritta per quel bit vince.
+function traceNotes(src) {
+  const start = src.search(/^##\s*2\.\s*Trace/m);
+  const block = start < 0 ? src : src.slice(start);
+  const notes = {};
+  for (const line of block.split('\n')) {
+    const c = line.split('|').map(s => s.trim());
+    if (c.length < 10) continue;
+    const bit = parseInt(c[2], 10);
+    if (!Number.isInteger(bit)) continue;
+    if (c[8]) notes[bit] = c[8];
+  }
+  return notes;
 }
 
 // Righe di stato di un singolo piano (master o sub), senza ricorsione.
 function rowsOf(src, verdict) {
   const tasks = planTasks(src);
+  const notes = traceNotes(src);
   const nextBit = tasks.find(t => (verdict.state & t.mask) === 0);
   const nextNum = nextBit ? nextBit.bit : -1;
   return tasks.map(t => {
     const done = (verdict.state & t.mask) !== 0;
     const fail = (verdict.failBits & t.mask) !== 0;
     const status = done ? 'completed' : (t.bit === nextNum ? 'in_progress' : 'pending');
-    return { bit: t.bit, task: taskLabel(t.bit), mask: hex(t.mask), desc: t.desc, done, fail, status };
+    return { bit: t.bit, task: taskLabel(t.bit), mask: hex(t.mask), desc: t.desc, dep: t.dep || '', note: notes[t.bit] || '', done, fail, status };
   });
 }
 
@@ -84,13 +104,13 @@ if (flag('todo')) {
   const todos = [];
   for (const r of rows) {
     todos.push({
-      content: r.sub ? `${r.desc}  (sub ${r.sub.popcount})` : r.desc,
+      content: `${r.sub ? `${r.desc}  (sub ${r.sub.popcount})` : r.desc}${r.note ? ` — ${r.note}` : ''}`,
       status: r.status,
       activeForm: r.desc.replace(/^(T\d+):\s*/, 'In corso $1: '),
     });
     if (r.sub) for (const m of r.sub.micro) {
       todos.push({
-        content: `    ↳ ${m.desc}`,
+        content: `    ↳ ${m.desc}${m.note ? ` — ${m.note}` : ''}`,
         status: m.status,
         activeForm: `In corso ${m.desc}`,
       });
@@ -103,12 +123,13 @@ if (flag('todo')) {
 if (flag('pretty')) {
   const mk = r => r.done ? '[x]' : (r.fail ? '[!]' : '[ ]');
   const arr = r => r.status === 'in_progress' ? '  <- prossima' : '';
+  const dl = r => r.dep ? ` dep:${r.dep.split(',').map(d => taskLabel(parseInt(d, 10))).join(',')}` : '';
   const lines = [`DanilovGoal: ${title}  (master ${v.popcount})`];
   for (const r of rows) {
-    lines.push(`${mk(r)} ${r.task} ${r.mask}  ${r.desc}${arr(r)}`);
+    lines.push(`${mk(r)} ${r.task} ${r.mask}  ${r.desc}${dl(r)}${r.note ? ` · ${r.note}` : ''}${arr(r)}`);
     if (r.sub) {
       lines.push(`      sub ${r.sub.popcount} [${r.task}]: ${r.sub.title}`);
-      for (const m of r.sub.micro) lines.push(`      ${mk(m)} ${m.task} ${m.mask}  ${m.desc}${arr(m)}`);
+      for (const m of r.sub.micro) lines.push(`      ${mk(m)} ${m.task} ${m.mask}  ${m.desc}${dl(m)}${m.note ? ` · ${m.note}` : ''}${arr(m)}`);
     }
   }
   lines.push(`validate(state) = ${v.validate === true ? 'TRUE' : 'FALSE'}  (lo emette validate.js)`);

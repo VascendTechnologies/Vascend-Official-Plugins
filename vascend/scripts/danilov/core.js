@@ -74,6 +74,25 @@ function bitsToTasks(mask) {
   return out;
 }
 
+// Estrae le dipendenze da una stringa di task del piano.
+//   "T03: foo @dep:0,T02"  ->  { desc: "T03: foo", dep: "0,1" }
+// bit 0-based; il token Tnn (1-based) diventa nn-1. Nessuna dep -> dep:'-'.
+// Pura: usata da plan.js/subplan.js per riempire la 4a colonna del piano. Le
+// dipendenze gatano l'ORDINE di marcatura (mark.js), non il verdetto.
+function parsePlanTask(s) {
+  const str = String(s).replace(/\|/g, '/');
+  const m = str.match(/@dep:\s*([0-9tT,\s]+)/);
+  if (!m) return { desc: str.trim(), dep: '-' };
+  const bits = m[1].split(',').map(x => x.trim()).filter(Boolean).map(tok => {
+    const tm = tok.match(/^[tT](\d+)$/);
+    if (tm) return parseInt(tm[1], 10) - 1;
+    const n = parseInt(tok, 10);
+    return Number.isInteger(n) ? n : null;
+  }).filter(n => n != null && n >= 0);
+  const desc = str.replace(/@dep:\s*[0-9tT,\s]+/, '').replace(/\s{2,}/g, ' ').trim();
+  return { desc, dep: bits.length ? bits.join(',') : '-' };
+}
+
 // Verdetto deterministico completo.
 function computeVerdict(text) {
   const secMissing = missingSections(text);
@@ -127,4 +146,4 @@ function computeVerdict(text) {
   };
 }
 
-module.exports = { computeVerdict, deriveState, declared, missingSections, hex, popcount, taskLabel, bitsToTasks, SECTIONS };
+module.exports = { computeVerdict, deriveState, declared, missingSections, hex, popcount, taskLabel, bitsToTasks, parsePlanTask, SECTIONS };
