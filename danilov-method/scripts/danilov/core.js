@@ -34,6 +34,13 @@ function deriveState(text) {
     // >>>0 per restare unsigned anche con bit alti (fino a 29).
     if (esito === 'OK') { state = (state | (1 << bit)) >>> 0; okRows += 1; }
     else if (esito === 'FAIL') { failBits = (failBits | (1 << bit)) >>> 0; }
+    // UNDO: annulla una marcatura precedente spegnendo il bit (e l'eventuale
+    // FAIL). Append-only e FIRMATO come ogni altra riga -> la catena resta
+    // intatta e l'annullamento e' tracciato (si vede che fu acceso e poi tolto).
+    else if (esito === 'UNDO') {
+      state = (state & ~(1 << bit)) >>> 0;
+      failBits = (failBits & ~(1 << bit)) >>> 0;
+    }
     prevSig = sig;
     validRows += 1;
   }

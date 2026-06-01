@@ -62,7 +62,8 @@ divergere sul verdetto:
 - `crypto.js` — firma HMAC a catena delle righe di Trace.
 - `session.js` — risoluzione di sessione e dei path di **stato** (vedi sotto).
 - `ui.js` — rendering delle card nei messaggi degli hook.
-- `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano, accende un bit, emette il verdetto (`--deep` valida anche i sotto-piani).
+- `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano, accende un bit (`--dry` per l'anteprima), emette il verdetto (`--deep` valida anche i sotto-piani).
+- `unmark.js` — annulla una marcatura sbagliata: appende una riga `UNDO` firmata che spegne il bit (append-only, tracciato).
 - `subplan.js` — crea un sotto-piano di micro-task legato a un macro-task del master.
 - `status.js` — vista dello stato del goal (`--pretty` albero macro/micro, `--todo` JSON per la todo nativa).
 - `memory.js` — catalogo di memoria persistente (ricerca BM25 + RRF, offline).
@@ -103,6 +104,24 @@ accanto al master): nessuna modifica al master, nessuna violazione del protect
 hook. I macro-task senza sotto-piano restano atomici (comportamento invariato).
 Il comando `/danilov` può delegare la progettazione dei sotto-piani a più
 sotto-agenti in parallelo, poi seguirli con `mark.js`/`status.js`.
+
+### Annullare e confermare (contro gli errori di marcatura)
+
+Capita di marcare il task sbagliato — o di lanciare `mark.js` dal **cwd
+sbagliato** (il goal si risolve da `process.cwd()`). Due rimedi:
+
+```
+node scripts/danilov/mark.js <bit> OK --dry   # ANTEPRIMA: mostra goal+cwd+task, non scrive
+node scripts/danilov/unmark.js <bit>          # ANNULLA: riga UNDO firmata che spegne il bit
+```
+
+- `--dry` stampa `goal: <file> "<titolo>" · cwd: <…>` e la transizione di
+  stato senza toccare nulla: confermi che goal e cwd siano quelli giusti
+  **prima** di marcare. Anche il `mark.js` reale stampa sempre `goal`/`cwd`.
+- `unmark.js` non cancella righe (romperebbe la catena HMAC): appende una riga
+  `UNDO` firmata che in `deriveState` spegne il bit. L'annullamento resta
+  tracciato e a prova di manomissione; `validate.js` ricalcola lo stato reale
+  dalla Trace comprese le righe `UNDO`.
 
 ## Architettura: codice nel plugin, stato in `~/.claude`
 
