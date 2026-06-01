@@ -59,11 +59,25 @@ mantiene il flag) e anche a uno stallo; si spegne solo con `/vascend off`,
 
 | Hook | Evento | Ruolo |
 |---|---|---|
+| `vascend-resume.js` | SessionStart | Fa emergere un goal aperto di un'altra sessione (resume cross-sessione); nudge solo se la sessione corrente non ne ha uno. |
 | `danilov-trigger.js` | UserPromptSubmit | Rileva `/vascend` o le keyword del metodo; alza il flag di sessione e crea lo scheletro del goal. |
 | `danilov-protect.js` | PreToolUse (Edit/Write/MultiEdit) | Nega le modifiche manuali ai file `DanilovGoal/` (anti-manomissione). |
-| `danilov-goal-audit.js` | Stop | Enforcement: blocca la chiusura del turno finché il goal non è conforme; anti-stallo dopo N turni. |
+| `danilov-goal-audit.js` | Stop | Enforcement: blocca la chiusura del turno finché il goal non è conforme; anti-stallo dopo `DANILOV_MAX_STALL` turni (`0` = persistente, mai rilasciare). |
 | `danilov-memory-file.js` | PostToolUse (Read/Edit/Write/MultiEdit) | Fa emergere le memorie Danilov inerenti al file toccato. |
 | `danilov-memory-capture.js` | Stop | Cattura le righe-evento dalla chat e le archivia (best-effort). |
+
+### Agenti (`agents/`)
+
+Due subagenti dedicati, col **prompt in notazione Danilov**:
+
+- **`vascend-planner`** — progetta un piano (INDICE/DEFINIZIONI/RELAZIONI) e la
+  lista di task one-hot; non esegue. Lancialo in parallelo (uno per macro-task)
+  per i piani grandi.
+- **`vascend-executor`** — esegue una stanza (bit) alla volta: fa il lavoro
+  reale e marca via script, senza mai toccare il file del goal a mano.
+
+Il comando `/vascend` delega la progettazione a `vascend-planner` e l'esecuzione
+a `vascend-executor`.
 
 ### Script (`scripts/danilov/`)
 
@@ -74,8 +88,9 @@ divergere sul verdetto:
 - `crypto.js` — firma HMAC a catena delle righe di Trace.
 - `session.js` — risoluzione di sessione e dei path di **stato** (vedi sotto).
 - `ui.js` — rendering delle card nei messaggi degli hook.
-- `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano, accende un bit (`--dry` per l'anteprima), emette il verdetto (`--deep` valida anche i sotto-piani).
+- `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano (accetta `@dep:T01,T02` per le dipendenze), accende un bit (`--dry` anteprima, `--note "<t>"` annota, `--check "<cmd>"` gate di verifica, `--force` bypassa le dipendenze), emette il verdetto (`--deep` valida anche i sotto-piani).
 - `unmark.js` — annulla una marcatura sbagliata: appende una riga `UNDO` firmata che spegne il bit (append-only, tracciato).
+- `resume.js` — riprende un DanilovGoal aperto di un'altra sessione: `--list`, anteprima, `--attach` (lo riporta sulla sessione corrente, coi sotto-piani).
 - `mode.js` — interruttore della modalità (`on`/`off`/`status`): scrive il flag sticky in modo deterministico; lo invoca il comando `/vascend on|off`.
 - `subplan.js` — crea un sotto-piano di micro-task legato a un macro-task del master.
 - `status.js` — vista dello stato del goal (`--pretty` albero macro/micro, `--todo` JSON per la todo nativa).
