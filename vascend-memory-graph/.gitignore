@@ -1,0 +1,5 @@
+node_modules/
+out/
+*.vsix
+preview/*.png
+preview/graph-preview.html

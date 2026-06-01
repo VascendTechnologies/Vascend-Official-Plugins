@@ -1,0 +1,63 @@
+{
+  "name": "vascend-memory-graph",
+  "displayName": "Vascend Memory Graph",
+  "description": "Visualizza a grafo le memorie .vascend del metodo Danilov, navigabili per progetto e per sessione/piano di Claude.",
+  "version": "0.3.0",
+  "publisher": "VascendTechnologies",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VascendTechnologies/Vascend-Official-Plugins.git",
+    "directory": "vascend-memory-graph"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "vascend",
+    "danilov",
+    "memory",
+    "graph",
+    "claude"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "vascend-memory-graph.open",
+        "title": "Vascend: Apri grafo memorie",
+        "category": "Vascend"
+      },
+      {
+        "command": "vascend-memory-graph.refresh",
+        "title": "Vascend: Ricarica grafo memorie",
+        "category": "Vascend"
+      }
+    ],
+    "configuration": {
+      "title": "Vascend Memory Graph",
+      "properties": {
+        "vascendMemoryGraph.memoryDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Cartella che contiene i file `.vascend`. Vuoto = default `~/.claude/.danilov-state/memory`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.4.0"
+  }
+}

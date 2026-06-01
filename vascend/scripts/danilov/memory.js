@@ -25,7 +25,12 @@ const MEM_ROOT = process.env.DANILOV_MEM_ROOT ||
   path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), '.danilov-state', 'memory');
 
 // Azioni della voce Danilov (apertura di una riga-evento v2).
-const ACTIONS = ['read', 'find', 'plan', 'edit', 'new', 'fix', 'error', 'run', 'test', 'warn', 'skip', 'next'];
+// Attivita' (cosa ho fatto) + CONOSCENZA (cosa ho deciso/imparato, col perche').
+const ACTIONS = ['read', 'find', 'plan', 'edit', 'new', 'fix', 'error', 'run', 'test', 'warn', 'skip', 'next',
+  'decide', 'learn', 'bug', 'rootcause', 'constrain'];
+// Azioni di CONOSCENZA: memorie ad alto valore, pesate di piu' nel retrieval (C/A).
+const KNOWLEDGE = new Set(['decide', 'learn', 'bug', 'rootcause', 'constrain']);
+function isKnowledge(action) { return KNOWLEDGE.has(action); }
 
 // ---- util di base -----------------------------------------------------------
 
@@ -101,7 +106,8 @@ function readRecords(slug) {
     const p = parseEventLine(raw);
     if (!p) continue;
     out.push({ id: recordId(slug, plan, raw), ts, project: slug, plan,
-      action: p.action, entity: p.entity, target: p.target, note: p.note, raw });
+      action: p.action, entity: p.entity, target: p.target, note: p.note, raw,
+      kind: isKnowledge(p.action) ? 'knowledge' : 'activity' });
   }
   return out;
 }
@@ -154,6 +160,7 @@ function buildRecord(rawInput, ctx) {
     ts: ctx.ts || new Date().toISOString(),
     project, cwd: ctx.cwd || null, plan, session: ctx.session || 'no-session',
     action: parsed.action, entity: parsed.entity, target: parsed.target, note: parsed.note, raw,
+    kind: isKnowledge(parsed.action) ? 'knowledge' : 'activity',
   };
 }
 
@@ -200,7 +207,7 @@ function loadCandidates(filters) {
 
 function rankRecords(query, pool) {
   if (!pool.length) return [];
-  const k1 = 1.5, b = 0.75, RRF_K = 60;
+  const k1 = 1.5, b = 0.75, RRF_K = 60, KNOWLEDGE_BOOST = 1.6;
   const docs = pool.map(r => tokenize(docText(r)));
   const N = docs.length;
   const df = new Map();
@@ -237,12 +244,14 @@ function rankRecords(query, pool) {
   for (const s of scored) {
     s.score = (s.bm25 > 0 ? 1 / (RRF_K + rankB.get(s.i)) : 0) +
               (s.cue > 0 ? 1 / (RRF_K + rankC.get(s.i)) : 0);
+    // A/C: la conoscenza (decisioni/lezioni/bug+rootcause) pesa di piu' del semplice log.
+    if (s.r.kind === 'knowledge') s.score *= KNOWLEDGE_BOOST;
   }
   scored.sort((a, c) => c.score - a.score);
   return scored.map(s => ({
     score: +s.score.toFixed(6), bm25: +s.bm25.toFixed(3), cue: +s.cue.toFixed(3),
     explain: { matched: s.matched, coverage: +s.cue.toFixed(3) },
-    id: s.r.id, ts: s.r.ts, project: s.r.project, plan: s.r.plan, action: s.r.action, raw: s.r.raw,
+    id: s.r.id, ts: s.r.ts, project: s.r.project, plan: s.r.plan, action: s.r.action, kind: s.r.kind || 'activity', raw: s.r.raw,
   }));
 }
 
@@ -250,7 +259,7 @@ function rankRecords(query, pool) {
 
 const COMMANDS = {
   add: {
-    summary: 'Memorizza una riga-evento (v2 "azione entity>target | nota" o v1 "@azione: x -> y [n]") taggata project+plan.',
+    summary: 'Memorizza una riga-evento (v2 "azione entity>target | nota" o v1 "@azione: x -> y [n]") taggata project+plan. Azioni di conoscenza (decide/learn/bug/rootcause/constrain) = memorie ad alto valore (note = il perche\'), pesate di piu\' nel retrieval.',
     args: ['<raw>', '--project S', '--plan S', '--session S', '--cwd P', '--pretty'],
     run(a) {
       const raw = a._[0];
@@ -335,7 +344,7 @@ const COMMANDS = {
         (!pl || r.plan === pl));
       pool.sort((x, y) => String(y.ts).localeCompare(String(x.ts)));
       out({ ok: true, count: Math.min(limit, pool.length), total: pool.length, filters: { entity: a.entity || null, target: a.target || null, action: a.action || null, plan: pl },
-        results: pool.slice(0, limit).map(r => ({ ts: r.ts, plan: r.plan, action: r.action, entity: r.entity, target: r.target, note: r.note, raw: r.raw, id: r.id })) }, a.pretty);
+        results: pool.slice(0, limit).map(r => ({ ts: r.ts, plan: r.plan, action: r.action, kind: r.kind || 'activity', entity: r.entity, target: r.target, note: r.note, raw: r.raw, id: r.id })) }, a.pretty);
     },
   },
 
@@ -372,7 +381,7 @@ const COMMANDS = {
         .filter(r => (!filters.plan || r.plan === filters.plan) && (!filters.action || r.action === filters.action));
       pool.sort((x, y) => String(y.ts).localeCompare(String(x.ts)));
       out({ ok: true, count: Math.min(limit, pool.length), total: pool.length,
-        results: pool.slice(0, limit).map(r => ({ ts: r.ts, plan: r.plan, action: r.action, raw: r.raw, id: r.id })) }, a.pretty);
+        results: pool.slice(0, limit).map(r => ({ ts: r.ts, plan: r.plan, action: r.action, kind: r.kind || 'activity', raw: r.raw, id: r.id })) }, a.pretty);
     },
   },
 

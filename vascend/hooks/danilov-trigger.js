@@ -24,6 +24,7 @@ const DANILOV = path.join(__dirname, '..', 'scripts', 'danilov');
 const scriptsPath = DANILOV.replace(/\\/g, '/'); // path POSIX-style per i messaggi all'agente
 const { goalDir, goalFile, currentSessionId } = require(path.join(DANILOV, 'session.js'));
 const ui = require(path.join(DANILOV, 'ui.js'));
+const { computeVerdict } = require(path.join(DANILOV, 'core.js'));
 
 const SKELETON = `# DanilovGoal: (in attesa di pianificazione)
 ## 1. Pianificazione
@@ -58,6 +59,31 @@ function memorySurface(cwd) {
   return '\n' + ui.card(null, rows);
 }
 
+// Reiniezione nel loop (C): memorie RILEVANTI al tema del prompt corrente.
+// Cerca nella memoria locale (BM25+cue, conoscenza pesata) e mostra i top
+// risultati, da LEGGERE prima di pianificare. Ritorna null se niente di utile.
+function relevantMemories(cwd, prompt) {
+  const q = String(prompt || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (q.length < 4) return null;
+  const memScript = path.join(DANILOV, 'memory.js');
+  try {
+    const o = execFileSync('node', [memScript, 'search', '--query', q, '--cwd', cwd, '--k', '5'],
+      { encoding: 'utf8', timeout: 4000 });
+    const j = JSON.parse(o.trim().split('\n').pop());
+    if (j && j.ok && Array.isArray(j.results) && j.results.length) {
+      const rows = [];
+      rows.push(ui.kv('Rilevanti', `${j.results.length} memorie sul tema (su ${j.total_pool || j.results.length})`));
+      for (const r of j.results.slice(0, 5)) {
+        const mark = r.kind === 'knowledge' ? '* ' : '';
+        rows.push(ui.li(`${mark}${String(r.raw).slice(0, 72)} ${ui.G.dot} ${r.plan}`));
+      }
+      rows.push(ui.kv('', 'LEGGILE prima di pianificare: gia\' deciso/imparato qui.'));
+      return '\n' + ui.card('memorie rilevanti', rows);
+    }
+  } catch {}
+  return null;
+}
+
 const INSTRUCTIONS =
   '[Vascend] Modalita\' Vascend attiva (metodo Danilov). Carica la skill `danilov-prompt` (tool ' +
   'Skill) e applicala in modalita\' DanilovGoal: INDICE/DEFINIZIONI/RELAZIONI, ' +
@@ -67,7 +93,10 @@ const INSTRUCTIONS =
   'annulla `node ' + scriptsPath + '/unmark.js <bit>`), chiudi con `node ' +
   scriptsPath + '/validate.js`. Il turno non si chiude senza goal conforme. In ' +
   'DanilovGoal pensi in relazioni, non in frasi: ogni evento e\' una riga ' +
-  '`<azione> <target>>obiettivo | nota`. Il pensiero esteso lo affidi al file.';
+  '`<azione> <target>>obiettivo | nota`. Il pensiero esteso lo affidi al file. ' +
+  'Se sopra compaiono "memorie rilevanti", LEGGILE e tienine conto nel piano ' +
+  '(cosa e\' gia\' stato deciso/imparato/rotto sul tema) PRIMA di scrivere plan.js; ' +
+  'registra le nuove decisioni e lezioni con azioni decide/learn/bug/rootcause.';
 
 let input = '';
 const timeout = setTimeout(() => process.exit(0), 3000);
@@ -156,16 +185,27 @@ process.stdin.on('end', () => {
       fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: stickyOn, cwd, ts: Date.now() }), 'utf8');
     } catch {}
 
-    // Goal skeleton: nuovo obiettivo (slash-obiettivo o prompt sticky) -> reset;
-    // keyword -> crea solo se manca (non distrugge un goal in corso).
-    const resetGoal = isObjective || (stickyOn && isPlain);
+    // Goal skeleton: un nuovo obiettivo resetta; ma un goal IN CORSO (piano con
+    // MASK_TARGET presente e NON ancora conforme) NON va azzerato, altrimenti un
+    // prompt a meta' obiettivo (es. "continua") cancellerebbe piano+trace tra i
+    // turni. Reset solo se il goal manca, e' uno skeleton (niente piano) o e'
+    // gia' conforme (obiettivo precedente concluso -> questo e' nuovo).
     try {
       fs.mkdirSync(goalDir(cwd), { recursive: true });
       const gf = goalFile(cwd, sid);
-      if (resetGoal || !fs.existsSync(gf)) fs.writeFileSync(gf, SKELETON, 'utf8');
+      let inProgress = false;
+      if (fs.existsSync(gf)) {
+        try {
+          const v = computeVerdict(fs.readFileSync(gf, 'utf8'));
+          inProgress = v.target != null && !v.conforme; // piano presente e non illuminato
+        } catch {}
+      }
+      const wantReset = (isObjective || (stickyOn && isPlain)) && !inProgress;
+      if (wantReset || !fs.existsSync(gf)) fs.writeFileSync(gf, SKELETON, 'utf8');
     } catch {}
 
-    const memNote = memorySurface(cwd);
+    // Reiniezione nel loop (C): memorie rilevanti al tema, se ci sono; altrimenti panoramica.
+    const memNote = relevantMemories(cwd, prompt) || memorySurface(cwd);
 
     // /vascend <obiettivo>: il comando slash emette gia' le istruzioni di piano.
     if (isObjective) { if (memNote) process.stdout.write(memNote.trim()); process.exit(0); }
