@@ -47,7 +47,17 @@ script `plan.js`, `mark.js`, `validate.js`. Le righe di Trace sono firmate
    node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/plan.js "<titolo>" "T01: ..." "T02: ..." ...
    ```
    plan.js calcola `MASK_TARGET`, crea le 4 sezioni e l'intestazione Trace.
-3. Esegui i task UNO ALLA VOLTA, in ordine di bit crescente. Per ogni task:
+3. **Specchia il piano nella todo list nativa** — così l'utente vede tutti gli
+   obiettivi e il loro avanzamento. Ricava la lista pronta eseguendo:
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --todo
+   ```
+   restituisce `{todos:[{content,status,activeForm}]}` con lo stato derivato
+   dalla Trace firmata (la prima stanza al buio è `in_progress`, le altre
+   `pending`). Crea un task nativo per ogni T0k, **nello stesso ordine di
+   bit**, con il tool todo nativo dell'harness — **TaskCreate** (o `TodoWrite`
+   nelle build che lo usano).
+4. Esegui i task UNO ALLA VOLTA, in ordine di bit crescente. Per ogni task:
    a. annuncia `partito T<nn> 0x<MASK>` (mask = `1 << (nn-1)`);
    b. esegui l'azione reale;
    c. **marca il completamento ESEGUENDO** (mai a mano):
@@ -55,8 +65,11 @@ script `plan.js`, `mark.js`, `validate.js`. Le righe di Trace sono firmate
       node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mark.js <bit> OK
       ```
       (`FAIL` se non riuscita). Incolla l'output `completato T<nn> ...`.
+   d. **aggiorna la todo nativa**: porta il task appena chiuso a `completed`
+      (**TaskUpdate**) e il successivo a `in_progress`. In dubbio sullo stato,
+      ri-esegui `status.js --todo` e riallinea la todo a quella verità.
    UNA chiamata = UN bit: vietato saltare task o marcarne piu' insieme.
-4. **NON dichiarare tu il verdetto.** Finiti i task, esegui:
+5. **NON dichiarare tu il verdetto.** Finiti i task, esegui:
    ```
    node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/validate.js
    ```
@@ -64,6 +77,7 @@ script `plan.js`, `mark.js`, `validate.js`. Le righe di Trace sono firmate
    Se FALSE, elenca i task da ricontrollare; se segnala MANOMISSIONE, la
    Trace e' stata alterata fuori da mark.js. Incolla l'output cosi' com'e'.
    Se restano task in `missing`/FAIL, rifai l'azione + `mark.js` e ri-valida.
+   A castello illuminato, porta tutti i task nativi a `completed`.
 
 ## Come comunichi in chat
 

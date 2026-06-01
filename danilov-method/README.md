@@ -63,8 +63,24 @@ divergere sul verdetto:
 - `session.js` — risoluzione di sessione e dei path di **stato** (vedi sotto).
 - `ui.js` — rendering delle card nei messaggi degli hook.
 - `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano, accende un bit, emette il verdetto.
+- `status.js` — vista dello stato del goal (`--pretty` checklist, `--todo` JSON per la todo nativa).
 - `memory.js` — catalogo di memoria persistente (ricerca BM25 + RRF, offline).
 - `*.selftest.js` — test del core, della memoria e della UI.
+
+### Todo list nativa
+
+Durante un `/danilov`, gli obiettivi del goal vengono specchiati nella **todo
+list nativa** dell'harness (TaskCreate/TodoWrite): un task per ogni stanza, con
+lo stato derivato dalla Trace firmata (`completed` per i bit accesi, la prima
+stanza al buio `in_progress`, le altre `pending`). La fonte è deterministica:
+
+```
+node scripts/danilov/status.js --todo     # {todos:[{content,status,activeForm}]}
+node scripts/danilov/status.js --pretty    # checklist [x]/[ ] per la chat
+```
+
+Così, oltre al castello in notazione Danilov, l'utente vede tutti gli obiettivi
+e il loro avanzamento nella UI nativa.
 
 ## Architettura: codice nel plugin, stato in `~/.claude`
 
