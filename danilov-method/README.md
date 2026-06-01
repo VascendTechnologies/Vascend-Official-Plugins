@@ -62,8 +62,9 @@ divergere sul verdetto:
 - `crypto.js` — firma HMAC a catena delle righe di Trace.
 - `session.js` — risoluzione di sessione e dei path di **stato** (vedi sotto).
 - `ui.js` — rendering delle card nei messaggi degli hook.
-- `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano, accende un bit, emette il verdetto.
-- `status.js` — vista dello stato del goal (`--pretty` checklist, `--todo` JSON per la todo nativa).
+- `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano, accende un bit, emette il verdetto (`--deep` valida anche i sotto-piani).
+- `subplan.js` — crea un sotto-piano di micro-task legato a un macro-task del master.
+- `status.js` — vista dello stato del goal (`--pretty` albero macro/micro, `--todo` JSON per la todo nativa).
 - `memory.js` — catalogo di memoria persistente (ricerca BM25 + RRF, offline).
 - `*.selftest.js` — test del core, della memoria e della UI.
 
@@ -81,6 +82,27 @@ node scripts/danilov/status.js --pretty    # checklist [x]/[ ] per la chat
 
 Così, oltre al castello in notazione Danilov, l'utente vede tutti gli obiettivi
 e il loro avanzamento nella UI nativa.
+
+### Piani gerarchici (macro-task → micro-task)
+
+Per obiettivi grossi un piano piatto non basta. Il **master** contiene i
+**macro-task**; ogni macro-task può avere un **sotto-piano** di **micro-task**.
+Un macro-task si illumina SOLO quando il suo sotto-piano è conforme — il
+**roll-up** è garantito da `mark.js`, non dall'agente.
+
+```
+node scripts/danilov/subplan.js <macroBit> "<titolo>" "t01: micro" "t02: micro" ...
+node scripts/danilov/mark.js <sub.md> <microBit> OK   # accende un micro
+node scripts/danilov/mark.js <macroBit> OK            # accende il macro (rifiutato se il sub non è completo)
+node scripts/danilov/status.js --pretty               # albero macro → micro
+node scripts/danilov/validate.js --deep               # master + ogni sub + coerenza roll-up
+```
+
+La relazione master↔sub è implicita nel naming (`<sid>.sub<macroBit>.md`
+accanto al master): nessuna modifica al master, nessuna violazione del protect
+hook. I macro-task senza sotto-piano restano atomici (comportamento invariato).
+Il comando `/danilov` può delegare la progettazione dei sotto-piani a più
+sotto-agenti in parallelo, poi seguirli con `mark.js`/`status.js`.
 
 ## Architettura: codice nel plugin, stato in `~/.claude`
 

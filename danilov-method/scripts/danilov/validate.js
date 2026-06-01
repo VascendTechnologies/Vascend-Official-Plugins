@@ -4,19 +4,24 @@
 // Lo script legge il file, ricostruisce lo state dalla Trace e calcola
 // validate(state) == (state == MASK_TARGET). L'output e' la verita'.
 //
-// Uso:  node validate.js <path/DanilovGoal/slug.md>
-// Exit: 0 se conforme (validate TRUE e nessuna incoerenza), 1 altrimenti.
+// Uso:  node validate.js [file.md] [--deep]
+//   --deep: valida anche i SOTTO-PIANI (sid.sub<bit>.md) e la coerenza del
+//           roll-up (un macro-bit acceso DEVE avere il suo sub conforme).
+// Exit: 0 se conforme (con --deep: master + tutti i sub + roll-up coerente), 1 altrimenti.
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const { computeVerdict, hex } = require('./core.js');
-const { goalFile } = require('./session.js');
+const { computeVerdict, hex, taskLabel } = require('./core.js');
+const { goalFile, listSubGoals } = require('./session.js');
 
-const file = process.argv[2] || goalFile(process.cwd());
+const argv = process.argv.slice(2);
+const deep = argv.includes('--deep');
+const file = argv.find(a => !a.startsWith('--')) || goalFile(process.cwd());
+
 if (!file) {
-  console.error('Uso: node validate.js [file.md]   (default: goal di sessione ~/.claude/projects/<cwd>/DanilovGoal/<sid>.md)');
+  console.error('Uso: node validate.js [file.md] [--deep]   (default: goal di sessione)');
   process.exit(2);
 }
 if (!fs.existsSync(file)) {
@@ -42,5 +47,29 @@ if (v.inconsistencies.length) {
   for (const i of v.inconsistencies) lines.push(`  - ${i}`);
 }
 
+// --- Vista profonda: sotto-piani + coerenza del roll-up -----------------------
+let deepOk = true;
+if (deep) {
+  const subs = listSubGoals(process.cwd());
+  lines.push('');
+  lines.push(`Sotto-piani: ${subs.length}`);
+  for (const { macroBit, file: sf } of subs) {
+    const sv = computeVerdict(fs.readFileSync(sf, 'utf8'));
+    const macroOn = (v.state & ((1 << macroBit) >>> 0)) !== 0;
+    const tag = sv.conforme ? 'TRUE' : 'FALSE';
+    lines.push(`  - ${taskLabel(macroBit)} (${hex((1 << macroBit) >>> 0)}) ${path.basename(sf)}: ${sv.popcount} validate=${tag}`);
+    // Coerenza del roll-up: macro acceso => sub conforme.
+    if (macroOn && !sv.conforme) {
+      deepOk = false;
+      lines.push(`      ✱ INCOERENZA: macro acceso ma sotto-piano non conforme`);
+    }
+    if (!macroOn && sv.conforme) {
+      lines.push(`      · pronto per roll-up: sub conforme, macro ancora spento (mark.js ${macroBit} OK)`);
+    }
+    if (!sv.conforme) deepOk = false;
+    if (sv.inconsistencies.length) for (const i of sv.inconsistencies) lines.push(`      incoerenza sub: ${i}`);
+  }
+}
+
 process.stdout.write(lines.join('\n') + '\n');
-process.exit(v.conforme ? 0 : 1);
+process.exit((v.conforme && (!deep || deepOk)) ? 0 : 1);
