@@ -60,12 +60,28 @@ script `plan.js`, `mark.js`, `validate.js`. Le righe di Trace sono firmate
 4. Esegui i task UNO ALLA VOLTA, in ordine di bit crescente. Per ogni task:
    a. annuncia `partito T<nn> 0x<MASK>` (mask = `1 << (nn-1)`);
    b. esegui l'azione reale;
-   c. **marca il completamento ESEGUENDO** (mai a mano):
+   c. **conferma PRIMA di marcare** (anteprima, non scrive) — serve a non
+      marcare il task o il goal sbagliato:
+      ```
+      node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mark.js <bit> OK --dry
+      ```
+      Mostra `goal: <file> "<titolo>" · cwd: <…>`, il task e la transizione.
+      **Verifica che `goal` e `cwd` siano quelli giusti.** Se il goal/cwd è
+      sbagliato NON marcare: correggi il cwd (gli script risolvono il goal da
+      `process.cwd()` — lancia SEMPRE dalla stessa cartella del `plan.js`).
+   d. **marca il completamento ESEGUENDO** (mai a mano):
       ```
       node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mark.js <bit> OK
       ```
       (`FAIL` se non riuscita). Incolla l'output `completato T<nn> ...`.
-   d. **aggiorna la todo nativa**: porta il task appena chiuso a `completed`
+      mark.js stampa sempre `goal`/`cwd`: ricontrollali anche dopo.
+   e. **se hai marcato per sbaglio** (task errato, o cwd/goal sbagliato),
+      annulla — niente Edit a mano, una riga `UNDO` firmata spegne il bit:
+      ```
+      node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/unmark.js <bit>
+      ```
+      poi rifai col bit/goal giusti. L'annullamento resta tracciato.
+   f. **aggiorna la todo nativa**: porta il task appena chiuso a `completed`
       (**TaskUpdate**) e il successivo a `in_progress`. In dubbio sullo stato,
       ri-esegui `status.js --todo` e riallinea la todo a quella verità.
    UNA chiamata = UN bit: vietato saltare task o marcarne piu' insieme.
