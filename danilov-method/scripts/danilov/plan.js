@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { hex } = require('./core.js');
-const { goalFile, goalDir } = require('./session.js');
+const { goalFile, goalDir, listSubGoals } = require('./session.js');
 
 const argv = process.argv.slice(2);
 const title = argv.shift();
@@ -59,5 +59,14 @@ TOT_BIT: ${TOT}
 fs.mkdirSync(goalDir(process.cwd()), { recursive: true });
 const file = goalFile(process.cwd());
 fs.writeFileSync(file, md, 'utf8');
-console.log(`piano creato: ${TOT} task, MASK_TARGET=${hex(MASK)} -> ${file}`);
+
+// Un nuovo master INVALIDA i sotto-piani della sessione precedente: senza
+// pulirli si riaggancerebbero per naming (<sid>.sub<bit>.md) ai nuovi
+// macro-bit, falsando roll-up e vista. Rimuovili (sono stato, non codice).
+let dropped = 0;
+try {
+  for (const { file: sf } of listSubGoals(process.cwd())) { fs.rmSync(sf, { force: true }); dropped++; }
+} catch {}
+
+console.log(`piano creato: ${TOT} task, MASK_TARGET=${hex(MASK)} -> ${file}${dropped ? ` (rimossi ${dropped} sotto-piani obsoleti)` : ''}`);
 console.log('ora marca ogni task: node ' + path.join(__dirname, 'mark.js').replace(/\\/g, '/') + ' <bit> OK');
