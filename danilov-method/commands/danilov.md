@@ -10,23 +10,28 @@ obiettivo singolo.
 
 ## on / off / obiettivo — cosa fa `$ARGUMENTS`
 
-L'hook `danilov-trigger.js` ha **già** aggiornato lo stato di sessione prima di
-questo turno. In base a `$ARGUMENTS`:
+`$ARGUMENTS` decide il comportamento. **Il toggle on/off lo applichi TU
+eseguendo `mode.js`** (l'hook riceve il prompt espanso e non può farlo in modo
+affidabile):
 
-- **`on`** (oppure argomento **vuoto**): la **modalità STICKY** è ora attiva —
-  da adesso **ogni** prompt che l'utente manda è automaticamente un obiettivo
-  Danilov (verrà pianificato, tracciato e validato), senza riscrivere il
-  comando. **NON pianificare nulla ora**: conferma soltanto che la modalità è
-  attiva e che basta scrivere gli obiettivi come messaggi normali; per spegnere,
-  `/danilov off`. **Fermati qui.**
-- **`off`**: la modalità è stata **disattivata** (enforcement + sticky + goal
-  rimossi). Conferma e **fermati qui**.
+- **`on`** (oppure argomento **vuoto**): attiva la **modalità STICKY**. Esegui:
+  ```
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mode.js on
+  ```
+  Poi conferma che da ora **ogni** prompt è un obiettivo Danilov (pianificato,
+  tracciato, validato) senza riscrivere il comando; per spegnere `/danilov off`.
+  **NON pianificare nulla, NON creare goal: fermati qui.**
+- **`off`**: spegni la modalità. Esegui:
+  ```
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mode.js off
+  ```
+  Conferma e **fermati qui**.
 - **qualsiasi altro testo** = **obiettivo one-shot**: è la richiesta da eseguire
   col metodo, adesso, seguendo i passi qui sotto.
 
-Quando in modalità sticky arriva un prompt normale, l'hook inietta da sé le
-istruzioni del metodo: applica gli stessi passi qui sotto trattando quel prompt
-come obiettivo.
+Quando in modalità sticky arriva un prompt normale (non un comando), l'hook
+inietta da sé le istruzioni del metodo: applica gli stessi passi qui sotto
+trattando quel prompt come obiettivo.
 
 Attiva **tutto** il metodo Danilov in un colpo solo sull'obiettivo.
 

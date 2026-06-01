@@ -76,6 +76,7 @@ divergere sul verdetto:
 - `ui.js` — rendering delle card nei messaggi degli hook.
 - `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano, accende un bit (`--dry` per l'anteprima), emette il verdetto (`--deep` valida anche i sotto-piani).
 - `unmark.js` — annulla una marcatura sbagliata: appende una riga `UNDO` firmata che spegne il bit (append-only, tracciato).
+- `mode.js` — interruttore della modalità (`on`/`off`/`status`): scrive il flag sticky in modo deterministico; lo invoca il comando `/danilov on|off`.
 - `subplan.js` — crea un sotto-piano di micro-task legato a un macro-task del master.
 - `status.js` — vista dello stato del goal (`--pretty` albero macro/micro, `--todo` JSON per la todo nativa).
 - `memory.js` — catalogo di memoria persistente (ricerca BM25 + RRF, offline).

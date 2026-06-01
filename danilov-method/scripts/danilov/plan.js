@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { hex } = require('./core.js');
-const { goalFile, goalDir, listSubGoals } = require('./session.js');
+const { goalFile, goalDir, listSubGoals, CLAUDE_DIR, currentSessionId } = require('./session.js');
 
 const argv = process.argv.slice(2);
 const title = argv.shift();
@@ -66,6 +66,19 @@ fs.writeFileSync(file, md, 'utf8');
 let dropped = 0;
 try {
   for (const { file: sf } of listSubGoals(process.cwd())) { fs.rmSync(sf, { force: true }); dropped++; }
+} catch {}
+
+// Creare un piano = essere in modalita' goal enforced. Alza il flag della
+// sessione PRESERVANDO lo sticky (impostato da mode.js o dall'hook): cosi'
+// l'enforcement parte sia in one-shot sia in sticky, senza che il toggle on/off
+// dipenda dal parsing del prompt negli hook.
+try {
+  const STATE_DIR = path.join(CLAUDE_DIR, '.danilov-state');
+  const sid = String(currentSessionId() || 'default');
+  const ff = path.join(STATE_DIR, `${sid}.json`);
+  let prev = null; try { prev = JSON.parse(fs.readFileSync(ff, 'utf8')); } catch {}
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.writeFileSync(ff, JSON.stringify({ active: true, sticky: !!(prev && prev.sticky), cwd: process.cwd(), ts: new Date().toISOString() }), 'utf8');
 } catch {}
 
 console.log(`piano creato: ${TOT} task, MASK_TARGET=${hex(MASK)} -> ${file}${dropped ? ` (rimossi ${dropped} sotto-piani obsoleti)` : ''}`);
