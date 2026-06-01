@@ -92,6 +92,16 @@ process.stdin.on('end', () => {
     const cwd = data.cwd || process.cwd();
     const flagFile = path.join(STATE_DIR, `${sid}.json`);
 
+    // Quando si invoca lo slash command /danilov, l'hook riceve l'ESPANSIONE
+    // del comando (il suo markdown), non "/danilov on". Il comando si gestisce
+    // da se' (on/off via mode.js, obiettivo via plan.js): l'hook NON deve
+    // interferire (niente flag/goal spuri). Riconosci l'espansione e fai
+    // pass-through. (/danilov-clear e /danilov-compact hanno blob diversi e
+    // proseguono normalmente.)
+    if (/^#\s*Comando\s+\/danilov\b/m.test(prompt) || /##\s*on\s*\/\s*off\s*\/\s*obiettivo/i.test(prompt)) {
+      process.exit(0);
+    }
+
     // Flag corrente: serve a sapere se la modalita' STICKY e' gia' attiva.
     let curFlag = null;
     try { if (fs.existsSync(flagFile)) curFlag = JSON.parse(fs.readFileSync(flagFile, 'utf8')); } catch {}
