@@ -15,7 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { hex } = require('./core.js');
+const { hex, parsePlanTask } = require('./core.js');
 const { goalFile, subGoalFile, goalDir } = require('./session.js');
 
 const argv = process.argv.slice(2);
@@ -53,8 +53,9 @@ const TOT = tasks.length;
 const MASK = ((1 << TOT) >>> 0) - 1;
 const ts = new Date().toISOString().slice(0, 19).replace('T', ' ');
 const macroLabel = 'T' + String(macroBit + 1).padStart(2, '0');
-const planRows = tasks
-  .map((t, i) => `| ${i} | ${hex((1 << i) >>> 0)} | ${t.replace(/\|/g, '/')} |`)
+const parsed = tasks.map(parsePlanTask);
+const planRows = parsed
+  .map((p, i) => `| ${i} | ${hex((1 << i) >>> 0)} | ${p.desc} | ${p.dep} |`)
   .join('\n');
 
 const md = `# DanilovGoal[sub]: ${title}
@@ -64,16 +65,16 @@ Creato: ${ts}
 
 ## 1. Pianificazione
 
-| bit | mask | task |
-| --- | ---- | ---- |
+| bit | mask | task | dep |
+| --- | ---- | ---- | --- |
 ${planRows}
 
 MASK_TARGET = ${hex(MASK)}
 TOT_BIT: ${TOT}
 
 ## 2. Trace
-| ts | bit | mask | pre | post | esito | sig |
-|----|-----|------|-----|------|-------|-----|
+| ts | bit | mask | pre | post | esito | sig | nota |
+|----|-----|------|-----|------|-------|-----|------|
 
 ## 3. Validazione
 (compilata a fine corsa dal validatore deterministico validate.js)
