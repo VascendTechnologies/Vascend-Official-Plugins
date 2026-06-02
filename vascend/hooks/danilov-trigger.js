@@ -2,7 +2,9 @@
 // UserPromptSubmit Hook: attivazione del metodo Danilov (comando /vascend).
 //  - `/vascend on` (o `/vascend` senza argomento)  -> MODALITA' STICKY: da quel
 //    momento OGNI prompt e' un obiettivo Danilov, senza riscrivere il comando.
-//  - `/vascend off` / `/vascend-clear` / "annulla vascend" -> spegne tutto.
+//    TOGGLE ISTANTANEO (come /effort): il prompt viene BLOCCATO qui (decision:block),
+//    la modalita' si attiva subito in chat e il modello non viene invocato.
+//  - `/vascend off` / `/vascend-clear` / "annulla vascend" -> spegne tutto (idem, block).
 //  - `/vascend <obiettivo>`  -> obiettivo one-shot (non sticky).
 //  (riconosce anche i vecchi alias /danilov* per transizione.)
 //  - keyword del metodo      -> attiva su quel prompt.
@@ -84,6 +86,15 @@ function relevantMemories(cwd, prompt) {
   return null;
 }
 
+// Toggle istantaneo, sul modello di /effort: blocca il prompt PRIMA che arrivi
+// al modello e mostra una conferma pulita all'utente. decision:block + exit 0 ->
+// il modello NON viene mai invocato; `reason` e' mostrato all'utente (non aggiunto
+// al contesto). suppressOriginalPrompt nasconde il "/vascend on" dal messaggio.
+function blockPrompt(reason) {
+  try { process.stdout.write(JSON.stringify({ decision: 'block', reason, suppressOriginalPrompt: true })); } catch {}
+  process.exit(0);
+}
+
 const INSTRUCTIONS =
   '[Vascend] Modalita\' Vascend attiva (metodo Danilov). Carica la skill `danilov-prompt` (tool ' +
   'Skill) e applicala in modalita\' DanilovGoal: INDICE/DEFINIZIONI/RELAZIONI, ' +
@@ -112,12 +123,13 @@ process.stdin.on('end', () => {
     const cwd = data.cwd || process.cwd();
     const flagFile = path.join(STATE_DIR, `${sid}.json`);
 
-    // Quando si invoca lo slash command /vascend, l'hook riceve l'ESPANSIONE
-    // del comando (il suo markdown), non "/vascend on". Il comando si gestisce
-    // da se' (on/off via mode.js, obiettivo via plan.js): l'hook NON deve
-    // interferire (niente flag/goal spuri). Riconosci l'espansione e fai
-    // pass-through. (/vascend-clear e /vascend-compact hanno blob diversi e
-    // proseguono normalmente.)
+    // Normalmente l'hook riceve il testo GREZZO (`/vascend:vascend on`) PRIMA
+    // dell'espansione: e' qui sotto che on/off vengono gestiti (block) e
+    // l'obiettivo riconosciuto. Se pero' in qualche configurazione arriva
+    // l'ESPANSIONE del comando (il suo markdown), facciamo pass-through: in quel
+    // caso e' la markdown stessa a guidare (mode.js per on/off come fallback,
+    // plan.js per l'obiettivo). (/vascend-clear e /vascend-compact hanno blob
+    // diversi e proseguono normalmente.)
     if (/^#\s*Comando\s+\/(?:danilov|vascend)\b/m.test(prompt) || /##\s*on\s*\/\s*off\s*\/\s*obiettivo/i.test(prompt)) {
       process.exit(0);
     }
@@ -127,17 +139,23 @@ process.stdin.on('end', () => {
     try { if (fs.existsSync(flagFile)) curFlag = JSON.parse(fs.readFileSync(flagFile, 'utf8')); } catch {}
     const stickyOn = !!(curFlag && curFlag.sticky);
 
-    // Comando slash e suo argomento (on|off|<obiettivo>).
-    const slash = prompt.match(/^\s*\/(?:danilov|vascend)\b[ \t]*(.*)$/i);
+    // Comando slash e suo argomento (on|off|<obiettivo>). Il `(?::vascend)?`
+    // assorbe il namespace del plugin: il testo grezzo arriva come
+    // `/vascend:vascend on`, non `/vascend on`. Senza questo, l'argomento
+    // diventava ":vascend on" e on/off venivano scambiati per un obiettivo.
+    const slash = prompt.match(/^\s*\/(?:danilov|vascend)(?::vascend)?\b[ \t]*(.*)$/i);
     const slashArg = slash ? slash[1].trim().toLowerCase() : null;
 
-    // OFF prima di tutto: /vascend-clear, /vascend off, "annulla|disattiva|stop vascend".
+    // OFF prima di tutto: /vascend-clear, /vascend off|clear, "annulla|disattiva|stop vascend".
+    // Match ESATTO dell'argomento (non prefisso): cosi' un obiettivo che inizia
+    // per "off"/"clear" non viene scambiato per lo spegnimento.
     const isOff =
-      /^\s*\/(?:danilov|vascend)[-\s]+clear\b/i.test(prompt) ||
+      /^\s*\/(?:danilov|vascend)(?::vascend)?[-\s]+clear\b/i.test(prompt) ||
       /\b(annulla|disattiva|stop)\s+(?:danilov|vascend)\b/i.test(prompt) ||
-      (!!slash && /^off\b/.test(slashArg));
+      (!!slash && (slashArg === 'off' || slashArg === 'clear'));
     // ON: /vascend on  oppure  /vascend senza argomento -> interruttore sticky.
-    const isOn = !isOff && !!slash && (slashArg === '' || /^on\b/.test(slashArg));
+    // Anche qui match esatto: /vascend on <testo> resta un obiettivo, non un toggle.
+    const isOn = !isOff && !!slash && (slashArg === '' || slashArg === 'on');
     // Obiettivo one-shot: /vascend <testo> (diverso da on/off).
     const isObjective = !isOff && !isOn && !!slash;
 
@@ -153,24 +171,24 @@ process.stdin.on('end', () => {
     const isKeyword = !slash && TRIGGERS.some(re => re.test(prompt));
     const isPlain = !slash && !isKeyword; // prompt "normale"
 
-    // --- OFF: spegne enforcement, sticky e goal della sessione ---
+    // --- OFF: spegne enforcement, sticky e goal della sessione (toggle istantaneo) ---
     if (isOff) {
       try { fs.rmSync(flagFile, { force: true }); } catch {}
       try { fs.rmSync(goalFile(cwd, sid), { force: true }); } catch {}
-      process.stdout.write('[Vascend] Modalita\' Vascend disattivata (sticky OFF) per questa sessione.');
+      blockPrompt('[Vascend] Modalita\' Vascend disattivata per questa sessione (sticky OFF).');
       return;
     }
 
-    // --- ON: accende la modalita' STICKY; NON pianifica adesso ---
+    // --- ON: accende la modalita' STICKY (toggle istantaneo, come /effort); NON pianifica ---
+    // Blocca il prompt: la modalita' si attiva subito in chat, il modello non viene
+    // invocato (niente espansione del comando da interpretare).
     if (isOn) {
       try {
         fs.mkdirSync(STATE_DIR, { recursive: true });
         fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: true, cwd, ts: Date.now() }), 'utf8');
       } catch {}
-      const note = memorySurface(cwd);
-      process.stdout.write(('[Vascend] Modalita\' Vascend STICKY ATTIVA: da ora OGNI prompt e\' un ' +
-        'obiettivo Danilov (pianifica, marca, valida) senza riscrivere il comando. ' +
-        'Per spegnere: /vascend off.' + (note || '')).trim());
+      blockPrompt('[Vascend] Modalita\' Vascend STICKY ATTIVA: da ora OGNI prompt e\' un ' +
+        'obiettivo Danilov (pianifica, marca, valida) senza riscrivere il comando. Per spegnere: /vascend off.');
       return;
     }
 

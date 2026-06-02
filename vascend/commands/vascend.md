@@ -10,18 +10,23 @@ obiettivo singolo.
 
 ## on / off / obiettivo — cosa fa `$ARGUMENTS`
 
-`$ARGUMENTS` decide il comportamento. **Il toggle on/off lo applichi TU
-eseguendo `mode.js`** (l'hook riceve il prompt espanso e non può farlo in modo
-affidabile):
+`$ARGUMENTS` decide il comportamento. **`on`/`off` sono toggle ISTANTANEI**
+(come `/effort`): li gestisce direttamente l'hook `danilov-trigger.js`
+(UserPromptSubmit), che intercetta il comando, alza/abbassa il flag di sessione
+e **blocca il prompt** (`decision:block`) prima ancora che il modello sia
+invocato. In quel caso questa markdown non viene nemmeno espansa: vedi solo la
+conferma in chat. I passi `mode.js` qui sotto restano come **fallback** (se gli
+hook sono disattivati o, in rari casi, arriva a te l'espansione invece di
+`/vascend on`):
 
-- **`on`** (oppure argomento **vuoto**): attiva la **modalità STICKY**. Esegui:
+- **`on`** (oppure argomento **vuoto**): attiva la **modalità STICKY**. Fallback:
   ```
   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mode.js on
   ```
   Poi conferma che da ora **ogni** prompt è un obiettivo Danilov (pianificato,
   tracciato, validato) senza riscrivere il comando; per spegnere `/vascend off`.
   **NON pianificare nulla, NON creare goal: fermati qui.**
-- **`off`**: spegni la modalità. Esegui:
+- **`off`**: spegni la modalità. Fallback:
   ```
   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mode.js off
   ```
