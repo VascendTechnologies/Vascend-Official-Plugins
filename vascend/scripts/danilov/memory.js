@@ -24,6 +24,14 @@ try { process.stdout.setDefaultEncoding('utf8'); process.stderr.setDefaultEncodi
 const MEM_ROOT = process.env.DANILOV_MEM_ROOT ||
   path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), '.danilov-state', 'memory');
 
+// Tetto di ritenzione. La CONOSCENZA (decide/learn/bug/rootcause/constrain) non
+// scade mai; il LOG di attivita' (read/edit/run/...) viene cappato alle N righe
+// piu' recenti per progetto, cosi' lo store non cresce all'infinito. Senza tetto
+// era arrivato a ~2000 record / 200KB su un singolo progetto: retrieval rumoroso
+// (top-k pieno di righe read/edit quasi identiche) e hook lenti (ri-tokenizzano
+// tutto il file a ogni prompt). Override via env DANILOV_MEM_MAX_ACTIVITY.
+const MAX_ACTIVITY = Math.max(1, parseInt(process.env.DANILOV_MEM_MAX_ACTIVITY, 10) || 120);
+
 // Azioni della voce Danilov (apertura di una riga-evento v2).
 // Attivita' (cosa ho fatto) + CONOSCENZA (cosa ho deciso/imparato, col perche').
 const ACTIONS = ['read', 'find', 'plan', 'edit', 'new', 'fix', 'error', 'run', 'test', 'warn', 'skip', 'next',
@@ -185,7 +193,18 @@ function buildRecord(rawInput, ctx) {
   };
 }
 
-// Inserisce record nuovi (dedup per id), riscrive lo store. {added, skipped, ids}.
+// Applica il tetto di ritenzione: tiene TUTTA la conoscenza + le MAX_ACTIVITY
+// righe di attivita' piu' recenti (per ts). Ritorna l'insieme potato.
+function capRetention(records) {
+  const knowledge = records.filter(r => isKnowledge(r.action));
+  const activity = records.filter(r => !isKnowledge(r.action));
+  if (activity.length <= MAX_ACTIVITY) return records;
+  activity.sort((a, b) => String(a.ts).localeCompare(String(b.ts))); // vecchie -> nuove
+  return knowledge.concat(activity.slice(activity.length - MAX_ACTIVITY));
+}
+
+// Inserisce record nuovi (dedup per id), applica il tetto di ritenzione e
+// riscrive lo store. {added, skipped, ids, pruned}.
 function ingest(slug, records) {
   const existing = readRecords(slug);
   const seen = new Set(existing.map(r => r.id));
@@ -195,8 +214,10 @@ function ingest(slug, records) {
     if (seen.has(r.id)) { skipped++; continue; }
     seen.add(r.id); merged.push(r); added++; ids.push(r.id);
   }
-  if (added) writeRecords(slug, merged);
-  return { added, skipped, ids };
+  const capped = capRetention(merged);
+  const pruned = merged.length - capped.length;
+  if (added || pruned > 0) writeRecords(slug, capped);
+  return { added, skipped, ids, pruned };
 }
 
 // ---- retrieval portatile (VibeSearch: BM25 + cue + RRF) ---------------------
