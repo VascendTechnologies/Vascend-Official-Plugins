@@ -69,19 +69,31 @@ function relevantMemories(cwd, prompt) {
   if (q.length < 4) return null;
   const memScript = path.join(DANILOV, 'memory.js');
   try {
-    const o = execFileSync('node', [memScript, 'search', '--query', q, '--cwd', cwd, '--k', '5'],
+    const o = execFileSync('node', [memScript, 'search', '--query', q, '--cwd', cwd, '--k', '8'],
       { encoding: 'utf8', timeout: 4000 });
     const j = JSON.parse(o.trim().split('\n').pop());
-    if (j && j.ok && Array.isArray(j.results) && j.results.length) {
-      const rows = [];
-      rows.push(ui.kv('Rilevanti', `${j.results.length} memorie sul tema (su ${j.total_pool || j.results.length})`));
-      for (const r of j.results.slice(0, 5)) {
-        const mark = r.kind === 'knowledge' ? '* ' : '';
-        rows.push(ui.li(`${mark}${String(r.raw).slice(0, 72)} ${ui.G.dot} ${r.plan}`));
-      }
-      rows.push(ui.kv('', 'LEGGILE prima di pianificare: gia\' deciso/imparato qui.'));
-      return '\n' + ui.card('memorie rilevanti', rows);
+    if (!(j && j.ok && Array.isArray(j.results) && j.results.length)) return null;
+    // Dedup per TESTO (lo store accumulava la stessa riga sotto piani diversi ->
+    // top-k di righe identiche) e priorita' alla CONOSCENZA: e' l'unica che vale
+    // davvero rileggere prima di pianificare.
+    const seen = new Set();
+    const uniq = [];
+    for (const r of j.results) {
+      const key = String(r.raw || '').trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key); uniq.push(r);
     }
+    uniq.sort((a, b) => (b.kind === 'knowledge') - (a.kind === 'knowledge'));
+    const top = uniq.slice(0, 5);
+    if (!top.length) return null;
+    const rows = [];
+    rows.push(ui.kv('Rilevanti', `${top.length} memorie sul tema (su ${j.total_pool || top.length})`));
+    for (const r of top) {
+      const mark = r.kind === 'knowledge' ? '* ' : '';
+      rows.push(ui.li(`${mark}${String(r.raw).slice(0, 72)} ${ui.G.dot} ${r.plan}`));
+    }
+    rows.push(ui.kv('', 'LEGGILE prima di pianificare: gia\' deciso/imparato qui.'));
+    return '\n' + ui.card('memorie rilevanti', rows);
   } catch {}
   return null;
 }
@@ -108,6 +120,13 @@ const INSTRUCTIONS =
   'Se sopra compaiono "memorie rilevanti", LEGGILE e tienine conto nel piano ' +
   '(cosa e\' gia\' stato deciso/imparato/rotto sul tema) PRIMA di scrivere plan.js; ' +
   'registra le nuove decisioni e lezioni con azioni decide/learn/bug/rootcause.';
+
+// Promemoria breve per i turni SUCCESSIVI della stessa sessione sticky: il blocco
+// INSTRUCTIONS completo (~300 token) si inietta una volta sola, non a ogni prompt.
+const REMINDER =
+  '[Vascend] Modalita\' Vascend attiva (Danilov sticky): questo prompt e\' un ' +
+  'obiettivo. Pianifica con plan.js, marca con mark.js, valida con validate.js. ' +
+  'Se sotto compaiono "memorie rilevanti", leggile prima di pianificare.';
 
 let input = '';
 const timeout = setTimeout(() => process.exit(0), 3000);
@@ -138,6 +157,9 @@ process.stdin.on('end', () => {
     let curFlag = null;
     try { if (fs.existsSync(flagFile)) curFlag = JSON.parse(fs.readFileSync(flagFile, 'utf8')); } catch {}
     const stickyOn = !!(curFlag && curFlag.sticky);
+    // Il metodo e' gia' stato presentato in questa sessione? Se si', i turni
+    // successivi ricevono solo il promemoria breve invece del blocco completo.
+    const wasInstructed = !!(curFlag && curFlag.instructed);
 
     // Comando slash e suo argomento (on|off|<obiettivo>). Il `(?::vascend)?`
     // assorbe il namespace del plugin: il testo grezzo arriva come
@@ -197,10 +219,12 @@ process.stdin.on('end', () => {
     const shouldTrigger = isObjective || isKeyword || (stickyOn && isPlain);
     if (!shouldTrigger) process.exit(0);
 
-    // Alza il flag (enforcement), preservando lo sticky se era attivo.
+    // Alza il flag (enforcement), preservando lo sticky se era attivo. Marca
+    // `instructed`: da ora il metodo e' stato presentato, i prossimi turni della
+    // sessione ricevono solo il promemoria breve.
     try {
       fs.mkdirSync(STATE_DIR, { recursive: true });
-      fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: stickyOn, cwd, ts: Date.now() }), 'utf8');
+      fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: stickyOn, instructed: true, cwd, ts: Date.now() }), 'utf8');
     } catch {}
 
     // Goal skeleton: un nuovo obiettivo resetta; ma un goal IN CORSO (piano con
@@ -228,7 +252,8 @@ process.stdin.on('end', () => {
     // /vascend <obiettivo>: il comando slash emette gia' le istruzioni di piano.
     if (isObjective) { if (memNote) process.stdout.write(memNote.trim()); process.exit(0); }
 
-    // keyword o prompt-sticky: nessun comando slash -> le istruzioni le emette l'hook.
-    process.stdout.write(INSTRUCTIONS + memNote);
+    // keyword o prompt-sticky: nessun comando slash -> le istruzioni le emette
+    // l'hook. Blocco completo solo la prima volta della sessione; poi promemoria.
+    process.stdout.write((wasInstructed ? REMINDER : INSTRUCTIONS) + memNote);
   } catch {}
 });
