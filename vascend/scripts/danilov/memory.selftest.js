@@ -136,6 +136,31 @@ try {
   const O4 = run(['query', '--action', 'decide', '--project', 'demo']);
   check('O4 query azione conoscenza + kind', O4.json && O4.json.ok && O4.json.total >= 1 && O4.json.results[0].kind === 'knowledge', O4.json && String(O4.json.total));
 
+  // P. B: identita' canonica dei nodi -> dedup nel grafo
+  run(['add', 'edit src/CanonTest.ts>aa | x', '--project', 'canon', '--plan', 'pc']);
+  run(['add', 'edit CanonTest.ts>bb | y', '--project', 'canon', '--plan', 'pc']);
+  run(['add', 'read CANONTEST.TS>cc | z', '--project', 'canon', '--plan', 'pc']);
+  const P1 = run(['graph', '--project', 'canon']);
+  const canonNode = P1.json && P1.json.nodes.filter(n => n.id === 'canontest.ts');
+  check('P1 tre forme stesso file -> 1 nodo canonico (count 3)', canonNode && canonNode.length === 1 && canonNode[0].count === 3, P1.json && JSON.stringify(P1.json.stats));
+  check('P2 archi puntano all id canonico', P1.json && P1.json.edges.length === 3 && P1.json.edges.every(e => e.source === 'canontest.ts'), P1.json && JSON.stringify(P1.json.edges.map(e => e.source)));
+
+  // Q. F: supersede (marker) + auto latest-wins
+  run(['add', 'decide store>postgres | scelto postgres', '--project', 'sup', '--plan', 'pf']);
+  run(['add', 'decide store>sqlite | meglio sqlite, supersede=postgres', '--project', 'sup', '--plan', 'pf']);
+  const Q1 = run(['search', '--query', 'store postgres sqlite', '--project', 'sup']);
+  const find = (re) => Q1.json && Q1.json.results.find(r => re.test(r.raw));
+  const pg = find(/>postgres /), sl = find(/>sqlite/);
+  check('Q1 marker: la superata e superseded', pg && pg.superseded === true, pg && JSON.stringify(pg && { s: pg.superseded, sc: pg.score }));
+  check('Q2 marker: la superante non e superseded', sl && sl.superseded === false, sl && String(sl.superseded));
+  check('Q3 marker: superante sopra la superata', pg && sl && sl.score > pg.score, sl && pg && `${sl.score} vs ${pg.score}`);
+  // auto latest-wins su stessa chiave (knowledge), raw diversi per non deduplicare
+  run(['add', 'learn cache>ttl | ttl 60s prima versione', '--project', 'sup', '--plan', 'pf']);
+  run(['add', 'learn cache>ttl | ttl 300s versione nuova', '--project', 'sup', '--plan', 'pf']);
+  const Q5 = run(['search', '--query', 'cache ttl', '--project', 'sup']);
+  const oldTtl = Q5.json && Q5.json.results.filter(r => /60s/.test(r.raw));
+  check('Q4 auto latest-wins: la versione vecchia e superseded', oldTtl && oldTtl.length === 1 && oldTtl[0].superseded === true, oldTtl && JSON.stringify(oldTtl.map(r => r.superseded)));
+
   // L. related: memorie inerenti a un file
   run(['add', '@edit: Widget.tsx → render [ x ]', '--project', 'demo', '--plan', 'p9', '--session', 's9']);
   run(['add', '@fix: Widget.tsx → bug [ y ]', '--project', 'demo', '--plan', 'p9', '--session', 's9']);

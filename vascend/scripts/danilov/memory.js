@@ -86,6 +86,27 @@ function recordId(project, plan, raw) {
   return crypto.createHash('sha1').update(`${project}|${plan}|${raw}`).digest('hex').slice(0, 16);
 }
 
+// B: identita' CANONICA dei nodi. Un path -> basename minuscolo; altrimenti
+// trim + minuscolo. Cosi' "src/parser.py", "parser.py", "PARSER.PY" collassano
+// nello stesso nodo. Non distruttivo: il raw/label originale resta per il display.
+function canonicalId(label) {
+  let s = String(label || '').trim();
+  if (!s) return '';
+  if (/[\\/]/.test(s) || /\.[a-z0-9]{1,6}$/i.test(s)) {
+    s = s.split(/[\\/]/).filter(Boolean).pop() || s;
+  }
+  return s.toLowerCase();
+}
+
+// F: supersede esplicito. Una memoria di conoscenza puo' dichiarare di superarne
+// altre con un marker nella nota: "... supersede=<target>[,<target2>]". I target
+// vengono canonicalizzati per combaciare con l'identita' del nodo.
+function parseSupersedes(note) {
+  const m = String(note || '').match(/supersede[sd]?\s*[:=]\s*([^|]+)/i);
+  if (!m) return [];
+  return m[1].split(',').map(x => canonicalId(x)).filter(Boolean);
+}
+
 // ---- serializzazione .vascend (archi raggruppati per piano) -----------------
 
 const SEP = ' · ';
@@ -107,7 +128,7 @@ function readRecords(slug) {
     if (!p) continue;
     out.push({ id: recordId(slug, plan, raw), ts, project: slug, plan,
       action: p.action, entity: p.entity, target: p.target, note: p.note, raw,
-      kind: isKnowledge(p.action) ? 'knowledge' : 'activity' });
+      kind: isKnowledge(p.action) ? 'knowledge' : 'activity', supersedes: parseSupersedes(p.note) });
   }
   return out;
 }
@@ -160,7 +181,7 @@ function buildRecord(rawInput, ctx) {
     ts: ctx.ts || new Date().toISOString(),
     project, cwd: ctx.cwd || null, plan, session: ctx.session || 'no-session',
     action: parsed.action, entity: parsed.entity, target: parsed.target, note: parsed.note, raw,
-    kind: isKnowledge(parsed.action) ? 'knowledge' : 'activity',
+    kind: isKnowledge(parsed.action) ? 'knowledge' : 'activity', supersedes: parseSupersedes(parsed.note),
   };
 }
 
@@ -205,9 +226,50 @@ function loadCandidates(filters) {
   return out;
 }
 
+// F: decadimento temporale del peso. La conoscenza dura (half-life lunga), il log
+// di attivita' invecchia in fretta; un floor evita che svanisca del tutto.
+function decayWeight(r, now) {
+  const t = Date.parse(r.ts);
+  if (!Number.isFinite(t)) return 1;
+  const ageDays = Math.max(0, (now - t) / 86400000);
+  const halflife = r.kind === 'knowledge' ? 120 : 21;
+  const floor = r.kind === 'knowledge' ? 0.5 : 0.15;
+  return Math.max(floor, Math.pow(0.5, ageDays / halflife));
+}
+// F: indice supersede. Chiave = project|entity_canonica|target_canonico.
+//  - marker: un record con 'supersede=<t>' supera i record (project,entity,t) piu' vecchi;
+//  - auto: per la CONOSCENZA, stessa chiave -> vince il piu' recente.
+function buildSupersedeIndex(pool) {
+  const keyOf = (project, entity, target) => `${project}|${canonicalId(entity)}|${canonicalId(target)}`;
+  const latestKnowledge = new Map();
+  const markerTs = new Map();
+  for (const r of pool) {
+    const t = Date.parse(r.ts) || 0;
+    if (r.kind === 'knowledge' && r.target) {
+      const k = keyOf(r.project, r.entity, r.target);
+      if (t > (latestKnowledge.get(k) || 0)) latestKnowledge.set(k, t);
+    }
+    for (const sup of (r.supersedes || [])) {
+      const k = `${r.project}|${canonicalId(r.entity)}|${sup}`; // sup gia' canonico
+      if (t > (markerTs.get(k) || 0)) markerTs.set(k, t);
+    }
+  }
+  return { keyOf, latestKnowledge, markerTs };
+}
+function isSuperseded(r, idx) {
+  if (!r.target) return false;
+  const t = Date.parse(r.ts) || 0;
+  const k = idx.keyOf(r.project, r.entity, r.target);
+  if ((idx.markerTs.get(k) || 0) > t) return true;                       // marker esplicito
+  if (r.kind === 'knowledge' && (idx.latestKnowledge.get(k) || 0) > t) return true; // auto latest-wins
+  return false;
+}
+
 function rankRecords(query, pool) {
   if (!pool.length) return [];
-  const k1 = 1.5, b = 0.75, RRF_K = 60, KNOWLEDGE_BOOST = 1.6;
+  const k1 = 1.5, b = 0.75, RRF_K = 60, KNOWLEDGE_BOOST = 1.6, SUPERSEDE_PENALTY = 0.12;
+  const NOW = Date.now();
+  const supIdx = buildSupersedeIndex(pool);
   const docs = pool.map(r => tokenize(docText(r)));
   const N = docs.length;
   const df = new Map();
@@ -246,12 +308,16 @@ function rankRecords(query, pool) {
               (s.cue > 0 ? 1 / (RRF_K + rankC.get(s.i)) : 0);
     // A/C: la conoscenza (decisioni/lezioni/bug+rootcause) pesa di piu' del semplice log.
     if (s.r.kind === 'knowledge') s.score *= KNOWLEDGE_BOOST;
+    // F: decadimento temporale + penalita' per le memorie superate.
+    s.score *= decayWeight(s.r, NOW);
+    s.superseded = isSuperseded(s.r, supIdx);
+    if (s.superseded) s.score *= SUPERSEDE_PENALTY;
   }
   scored.sort((a, c) => c.score - a.score);
   return scored.map(s => ({
     score: +s.score.toFixed(6), bm25: +s.bm25.toFixed(3), cue: +s.cue.toFixed(3),
     explain: { matched: s.matched, coverage: +s.cue.toFixed(3) },
-    id: s.r.id, ts: s.r.ts, project: s.r.project, plan: s.r.plan, action: s.r.action, kind: s.r.kind || 'activity', raw: s.r.raw,
+    id: s.r.id, ts: s.r.ts, project: s.r.project, plan: s.r.plan, action: s.r.action, kind: s.r.kind || 'activity', superseded: !!s.superseded, raw: s.r.raw,
   }));
 }
 
@@ -355,18 +421,29 @@ const COMMANDS = {
       const cwd = a.cwd || process.cwd();
       const filters = { project: a.all ? null : (a.project || projectSlug(cwd)) };
       const pool = loadCandidates(filters).filter(r => !a.plan || r.plan === a.plan);
+      // B: id del nodo = identita' CANONICA; label di display = forma originale piu' frequente.
       const nodes = new Map();
-      const touch = (label) => { if (!label) return; const n = nodes.get(label) || { id: label, label, count: 0 }; n.count++; nodes.set(label, n); };
+      const touch = (label) => {
+        const id = canonicalId(label);
+        if (!id) return null;
+        const n = nodes.get(id) || { id, label, count: 0, _labels: {} };
+        n.count++;
+        n._labels[label] = (n._labels[label] || 0) + 1;
+        if (n._labels[label] > (n._labels[n.label] || 0)) n.label = label;
+        nodes.set(id, n);
+        return id;
+      };
       const edges = [];
       for (const r of pool) {
-        touch(r.entity);
+        const sid = touch(r.entity);
         if (r.target) {
-          touch(r.target);
-          edges.push({ source: r.entity, target: r.target, action: r.action, plan: r.plan, ts: r.ts, ...(r.note ? { note: r.note } : {}) });
+          const tid = touch(r.target);
+          if (sid && tid) edges.push({ source: sid, target: tid, action: r.action, plan: r.plan, ts: r.ts, ...(r.note ? { note: r.note } : {}) });
         }
       }
+      const nodeList = [...nodes.values()].map(n => ({ id: n.id, label: n.label, count: n.count }));
       out({ ok: true, project: filters.project || 'ALL', plan: a.plan || null, format: 'node-link',
-        stats: { nodes: nodes.size, edges: edges.length }, nodes: [...nodes.values()], edges }, a.pretty);
+        stats: { nodes: nodeList.length, edges: edges.length }, nodes: nodeList, edges }, a.pretty);
     },
   },
 
@@ -481,4 +558,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { parseEventLine, toRelation, buildRecord, ingest, readRecords, writeRecords, projectSlug, recordId, storeFile, MEM_ROOT };
+module.exports = { parseEventLine, toRelation, buildRecord, ingest, readRecords, writeRecords, projectSlug, recordId, canonicalId, storeFile, MEM_ROOT };
