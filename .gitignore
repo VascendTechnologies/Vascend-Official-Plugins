@@ -1,0 +1,15 @@
+# Stato runtime — vive in ~/.claude, mai nel repo
+.danilov-state/
+DanilovGoal/
+.danilov-compact.md
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
