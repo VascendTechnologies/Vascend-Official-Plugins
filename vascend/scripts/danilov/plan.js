@@ -5,13 +5,18 @@
 //
 // Uso:  node plan.js "<titolo>" "T01: descrizione" "T02: ..." ...
 // Il numero di task = TOT_BIT; MASK_TARGET = (1<<TOT_BIT)-1.
+//
+// Questo e' il castello di DEFAULT (master <sid>.md). Per piu' castelli nella
+// stessa sessione usa castle.js (castelli nominati, illimitati); per i
+// micro-task di un macro usa subplan.js (ricorsivo a profondita' libera).
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const { hex, parsePlanTask } = require('./core.js');
-const { goalFile, goalDir, listSubGoals, CLAUDE_DIR, currentSessionId } = require('./session.js');
+const { hex } = require('./core.js');
+const { buildPlanMd } = require('./scaffold.js');
+const { goalFile, goalDir, listDescendants, CLAUDE_DIR, currentSessionId } = require('./session.js');
 
 const argv = process.argv.slice(2);
 const title = argv.shift();
@@ -21,53 +26,25 @@ if (!title || tasks.length < 1) {
   process.exit(1);
 }
 if (tasks.length > 30) {
-  console.error(`Troppi task (${tasks.length}): massimo 30 bit. Raggruppa.`);
+  console.error(`Troppi task (${tasks.length}): massimo 30 bit. Raggruppa, scomponi in sotto-piani (subplan.js) o in piu' castelli (castle.js).`);
   process.exit(1);
 }
 
-const TOT = tasks.length;
-const MASK = ((1 << TOT) >>> 0) - 1;
-const ts = new Date().toISOString().slice(0, 19).replace('T', ' ');
-
-const parsed = tasks.map(parsePlanTask);
-const planRows = parsed
-  .map((p, i) => `| ${i} | ${hex((1 << i) >>> 0)} | ${p.desc} | ${p.dep} |`)
-  .join('\n');
-
-const md = `# DanilovGoal: ${title}
-Creato: ${ts}
-
-## 1. Pianificazione
-
-| bit | mask | task | dep |
-| --- | ---- | ---- | --- |
-${planRows}
-
-MASK_TARGET = ${hex(MASK)}
-TOT_BIT: ${TOT}
-
-## 2. Trace
-| ts | bit | mask | pre | post | esito | sig | nota |
-|----|-----|------|-----|------|-------|-----|------|
-
-## 3. Validazione
-(compilata a fine corsa dal validatore deterministico validate.js)
-
-## 4. Riepilogo visivo
-(placeholder: i bit mancanti compaiono qui se validate=FALSE)
-`;
+const { TOT, MASK, md } = buildPlanMd({ title, tasks });
 
 fs.mkdirSync(goalDir(process.cwd()), { recursive: true });
 const file = goalFile(process.cwd());
-fs.writeFileSync(file, md, 'utf8');
 
-// Un nuovo master INVALIDA i sotto-piani della sessione precedente: senza
-// pulirli si riaggancerebbero per naming (<sid>.sub<bit>.md) ai nuovi
-// macro-bit, falsando roll-up e vista. Rimuovili (sono stato, non codice).
+// Un nuovo master INVALIDA i sotto-piani del master precedente (a OGNI
+// profondita'): senza pulirli si riaggancerebbero per naming ai nuovi
+// macro-bit, falsando roll-up e vista. I castelli nominati (castle.js) sono
+// piani INDIPENDENTI: restano intatti.
 let dropped = 0;
 try {
-  for (const { file: sf } of listSubGoals(process.cwd())) { fs.rmSync(sf, { force: true }); dropped++; }
+  for (const { file: sf } of listDescendants(file)) { fs.rmSync(sf, { force: true }); dropped++; }
 } catch {}
+
+fs.writeFileSync(file, md, 'utf8');
 
 // Creare un piano = essere in modalita' goal enforced. Alza il flag della
 // sessione PRESERVANDO lo sticky (impostato da mode.js o dall'hook): cosi'

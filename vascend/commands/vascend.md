@@ -128,20 +128,50 @@ script `plan.js`, `mark.js`, `validate.js`. Le righe di Trace sono firmate
    Se restano task in `missing`/FAIL, rifai l'azione + `mark.js` e ri-valida.
    A castello illuminato, porta tutti i task nativi a `completed`.
 
-## Piani gerarchici (macro-task con sotto-piani di micro-task)
+## Castelli multipli (il regno)
 
-Per obiettivi grossi, un piano piatto non basta: usa **due livelli**. Il
-master contiene i **macro-task** (i suoi bit); ogni macro-task può avere un
-**sotto-piano** con i propri **micro-task**. Un macro-task si illumina SOLO
-quando il suo sotto-piano è completo — il **roll-up** è garantito da `mark.js`,
-non dalle tue parole.
+Un obiettivo grande non è un castello più grosso: è **più castelli**. Il
+master (`plan.js`) è il castello di default; con `castle.js` ne alzi quanti
+ne servono — il loro insieme è il **regno** della sessione, e il verdetto
+finale è del regno intero (lo Stop hook blocca finché OGNI castello è
+illuminato).
 
-1. **Master** come sopra (`plan.js` coi macro-task `T01..TNN`).
-2. **Sotto-piano** per un macro-task complesso (`<macroBit>` 0-based, `T01 -> 0`):
+```
+node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js new <slug> "<titolo>" "T01: ..." "T02: ..." [--after <slug>]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js list      # radici del regno + verdetti
+node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js map       # mappa completa (castelli -> macro -> micro)
+node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js next      # prossima stanza al buio del regno
+node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js drop <slug>
+```
+
+- le stanze di un castello si accendono passando il SUO file a `mark.js`:
+  `mark.js <file-castello.md> <bit> OK` (il file lo stampa `castle.js new`);
+- `--after <slug>` mette i castelli in DAG: `mark.js` NEGA ogni stanza del
+  castello finché il prerequisito non è conforme (prima le fondamenta, poi
+  la torre);
+- il verdetto aggregato è `validate.js --kingdom`: TRUE sse ogni castello è
+  illuminato. La vista completa: `status.js --all --pretty` (o `--all --todo`
+  per la todo nativa dell'intero regno).
+
+## Piani gerarchici (macro/micro, profondità RICORSIVA)
+
+Dentro ogni castello i task sono su livelli: i **macro-task** (i bit del
+piano) e, per ogni macro, un eventuale **sotto-piano** di **micro-task** —
+che a sua volta può avere sotto-piani: la gerarchia è ricorsiva senza fondo.
+Il tetto di 30 bit vale per il singolo piano; la scala viene dalla
+composizione (n castelli x profondità), quindi i task possono essere
+infiniti. Un bit con figlio si illumina SOLO quando il figlio è conforme —
+il **roll-up** è garantito da `mark.js` livello per livello, non dalle tue
+parole.
+
+1. **Master** come sopra (`plan.js` coi macro-task `T01..TNN`), o un castello
+   (`castle.js new`).
+2. **Sotto-piano** per un task complesso (`<macroBit>` 0-based, `T01 -> 0`):
    ```
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/subplan.js <macroBit> "<titolo sub>" "t01: micro" "t02: micro" ...
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/subplan.js [padre.md] <macroBit> "<titolo sub>" "t01: micro" "t02: micro" ...
    ```
-   crea `sid.sub<macroBit>.md` (relazione master↔sub implicita nel naming).
+   senza `padre.md` il padre è il master; col padre esplicito (castello o
+   altro sub) crei il livello successivo: `<base-padre>.sub<bit>.md`.
 3. **Progettazione parallela coi sotto-agenti `vascend-planner`** (opzionale,
    consigliato per piani ampi): dopo aver creato il master, lancia **in
    parallelo** (Agent tool con `subagent_type: vascend-planner`, una sola
@@ -165,9 +195,11 @@ non dalle tue parole.
    - un macro-task **senza** sotto-piano si accende direttamente (atomico).
 5. **Vista e verdetto gerarchici**:
    ```
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --pretty   # albero macro -> micro
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --pretty    # albero macro -> micro (ricorsivo)
    node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --todo      # todo nativa con micro indentati
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/validate.js --deep    # master + ogni sub + coerenza roll-up
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --all --pretty  # l'intero regno
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/validate.js --deep    # un piano + figli RICORSIVI + coerenza roll-up
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/validate.js --kingdom # verdetto del regno (tutti i castelli)
    ```
    Specchia nella todo nativa anche i micro (`status.js --todo` li emette già
    indentati): l'utente vede l'intero albero degli obiettivi.

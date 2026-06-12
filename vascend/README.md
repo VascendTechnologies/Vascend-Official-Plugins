@@ -62,7 +62,7 @@ mantiene il flag) e anche a uno stallo; si spegne solo con `/vascend off`,
 | `vascend-resume.js` | SessionStart | Fa emergere un goal aperto di un'altra sessione (resume cross-sessione); nudge solo se la sessione corrente non ne ha uno. |
 | `danilov-trigger.js` | UserPromptSubmit | Rileva `/vascend` o le keyword del metodo; alza il flag di sessione e crea lo scheletro del goal. |
 | `danilov-protect.js` | PreToolUse (Edit/Write/MultiEdit) | Nega le modifiche manuali ai file `DanilovGoal/` (anti-manomissione). |
-| `danilov-goal-audit.js` | Stop | Enforcement: blocca la chiusura del turno finché il goal non è conforme; anti-stallo dopo `DANILOV_MAX_STALL` turni (`0` = persistente, mai rilasciare). |
+| `danilov-goal-audit.js` | Stop | Enforcement sul REGNO: blocca la chiusura del turno finché ogni castello non è conforme; indica la prossima stanza al buio; anti-stallo dopo `DANILOV_MAX_STALL` turni senza stanze nuove in tutto il regno (`0` = persistente, mai rilasciare). |
 | `danilov-memory-file.js` | PostToolUse (Read/Edit/Write/MultiEdit) | Fa emergere le memorie Danilov inerenti al file toccato. |
 | `danilov-memory-capture.js` | Stop | Cattura le righe-evento dalla chat e le archivia (best-effort). |
 
@@ -72,7 +72,8 @@ Due subagenti dedicati, col **prompt in notazione Danilov**:
 
 - **`vascend-planner`** — progetta un piano (INDICE/DEFINIZIONI/RELAZIONI) e la
   lista di task one-hot; non esegue. Lancialo in parallelo (uno per macro-task)
-  per i piani grandi.
+  per i piani grandi. Per obiettivi con più workstream propone N castelli
+  nominati e le dipendenze tra loro (`--after`).
 - **`vascend-executor`** — esegue una stanza (bit) alla volta: fa il lavoro
   reale e marca via script, senza mai toccare il file del goal a mano.
 
@@ -86,14 +87,17 @@ divergere sul verdetto:
 
 - `core.js` — verdetto deterministico (deriveState dalla Trace firmata, validate).
 - `crypto.js` — firma HMAC a catena delle righe di Trace.
-- `session.js` — risoluzione di sessione e dei path di **stato** (vedi sotto).
+- `session.js` — risoluzione di sessione e dei path di **stato** (vedi sotto): master, castelli nominati, figli ricorsivi.
+- `kingdom.js` — vista aggregata del **regno** (tutti i castelli della sessione): verdetto aggregato, prossima stanza al buio.
+- `scaffold.js` — unica fabbrica dello scheletro markdown dei piani (plan/castle/subplan: nessun drift di forma).
 - `ui.js` — rendering delle card nei messaggi degli hook.
-- `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano (accetta `@dep:T01,T02` per le dipendenze), accende un bit (`--dry` anteprima, `--note "<t>"` annota, `--check "<cmd>"` gate di verifica, `--force` bypassa le dipendenze), emette il verdetto (`--deep` valida anche i sotto-piani).
+- `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano (accetta `@dep:T01,T02` per le dipendenze), accende un bit (`--dry` anteprima, `--note "<t>"` annota, `--check "<cmd>"` gate di verifica, `--force` bypassa dipendenze e gate After), emette il verdetto (`--deep` figli ricorsivi + coerenza roll-up, `--kingdom` tutti i castelli).
+- `castle.js` — **castelli multipli**: `new <slug> … [--after <slug>]`, `list`, `map`, `next` (prossima stanza al buio del regno), `drop`.
 - `unmark.js` — annulla una marcatura sbagliata: appende una riga `UNDO` firmata che spegne il bit (append-only, tracciato).
-- `resume.js` — riprende un DanilovGoal aperto di un'altra sessione: `--list`, anteprima, `--attach` (lo riporta sulla sessione corrente, coi sotto-piani).
-- `mode.js` — interruttore della modalità (`on`/`off`/`status`): scrive il flag sticky in modo deterministico; lo invoca il comando `/vascend on|off`.
-- `subplan.js` — crea un sotto-piano di micro-task legato a un macro-task del master.
-- `status.js` — vista dello stato del goal (`--pretty` albero macro/micro, `--todo` JSON per la todo nativa).
+- `resume.js` — riprende un REGNO aperto di un'altra sessione: `--list`, anteprima, `--attach` (riporta master + castelli + sotto-piani sulla sessione corrente).
+- `mode.js` — interruttore della modalità (`on`/`off`/`status`): scrive il flag sticky in modo deterministico; lo invoca il comando `/vascend on|off`. `off` spegne l'intero regno.
+- `subplan.js` — crea un sotto-piano di micro-task per un task di QUALSIASI piano (master, castello o altro sub): gerarchia ricorsiva senza fondo.
+- `status.js` — vista dello stato (`--pretty` albero ricorsivo, `--todo` JSON per la todo nativa, `--all` l'intero regno).
 - `memory.js` — catalogo di memoria persistente (ricerca BM25 + RRF, offline).
 - `*.selftest.js` — test del core, della memoria e della UI.
 
@@ -112,28 +116,54 @@ node scripts/danilov/status.js --pretty    # checklist [x]/[ ] per la chat
 Così, oltre al castello in notazione Danilov, l'utente vede tutti gli obiettivi
 e il loro avanzamento nella UI nativa.
 
-### Piani gerarchici (macro-task → micro-task)
+### Castelli multipli — il regno
 
-Per obiettivi grossi un piano piatto non basta. Il **master** contiene i
-**macro-task**; ogni macro-task può avere un **sotto-piano** di **micro-task**.
-Un macro-task si illumina SOLO quando il suo sotto-piano è conforme — il
-**roll-up** è garantito da `mark.js`, non dall'agente.
+Un obiettivo grande non è un castello più grosso: è **più castelli**. Il
+master (`plan.js`) è il castello di default; con `castle.js` se ne alzano
+quanti servono (illimitati) — il loro insieme è il **regno** della sessione.
+Lo Stop hook fa enforcement sul regno intero: il turno si chiude solo quando
+**ogni** castello è illuminato.
 
 ```
-node scripts/danilov/subplan.js <macroBit> "<titolo>" "t01: micro" "t02: micro" ...
+node scripts/danilov/castle.js new api "Refactor API" "T01: ..." "T02: ..."
+node scripts/danilov/castle.js new deploy "Deploy" "T01: ..." --after api   # DAG tra castelli
+node scripts/danilov/castle.js list        # radici del regno + verdetti
+node scripts/danilov/castle.js map         # mappa completa (castelli → macro → micro)
+node scripts/danilov/castle.js next        # prossima stanza al buio del regno
+node scripts/danilov/validate.js --kingdom # verdetto aggregato: TRUE sse tutti illuminati
+node scripts/danilov/status.js --all --pretty
+```
+
+`--after <slug>` mette i castelli in DAG: `mark.js` nega ogni stanza del
+castello finché il prerequisito non è conforme (prima le fondamenta, poi la
+torre). `castle.js drop <slug>` demolisce un castello coi suoi sotto-piani.
+
+### Piani gerarchici (macro → micro, profondità ricorsiva)
+
+Dentro ogni castello i task sono su livelli: ogni task può avere un
+**sotto-piano**, e ogni micro a sua volta il suo — **ricorsivo senza fondo**.
+Il tetto di 30 bit vale per il singolo piano: la scala viene dalla
+composizione (n castelli × profondità), quindi i task possono essere
+infiniti. Un bit con figlio si illumina SOLO quando il figlio è conforme —
+il **roll-up** è garantito da `mark.js` livello per livello, non dall'agente.
+
+```
+node scripts/danilov/subplan.js <macroBit> "<titolo>" "t01: micro" ...          # padre = master
+node scripts/danilov/subplan.js <padre.md> <bit> "<titolo>" "t01: micro" ...    # padre = castello o sub
 node scripts/danilov/mark.js <sub.md> <microBit> OK   # accende un micro
-node scripts/danilov/mark.js <macroBit> OK            # accende il macro (rifiutato se il sub non è completo)
-node scripts/danilov/status.js --pretty               # albero macro → micro
-node scripts/danilov/validate.js --deep               # master + ogni sub + coerenza roll-up
+node scripts/danilov/mark.js <padre.md> <bit> OK      # accende il padre (rifiutato se il figlio non è completo)
+node scripts/danilov/status.js --pretty               # albero ricorsivo
+node scripts/danilov/validate.js --deep               # piano + figli ricorsivi + coerenza roll-up
 ```
 
-La relazione master↔sub è implicita nel naming (`<sid>.sub<macroBit>.md`
-accanto al master): nessuna modifica al master, nessuna violazione del protect
-hook. I macro-task senza sotto-piano restano atomici (comportamento invariato).
-Rigenerare il master con `plan.js` **invalida e rimuove** i sotto-piani della
-sessione precedente, così non si riagganciano per naming ai nuovi macro-bit.
-Il comando `/vascend` può delegare la progettazione dei sotto-piani a più
-sotto-agenti in parallelo, poi seguirli con `mark.js`/`status.js`.
+La relazione padre↔figlio è implicita nel naming (`<base>.sub<bit>.md`):
+nessuna modifica al padre, nessuna violazione del protect hook. I task senza
+sotto-piano restano atomici (comportamento invariato). Rigenerare un piano
+(`plan.js`, `castle.js new`, `subplan.js`) **invalida e rimuove** i SUOI
+discendenti, così non si riagganciano per naming ai nuovi bit; i castelli
+nominati sono indipendenti e non vengono toccati da `plan.js`. Il comando
+`/vascend` può delegare la progettazione dei sotto-piani a più sotto-agenti
+in parallelo, poi seguirli con `mark.js`/`status.js`.
 
 ### Annullare e confermare (contro gli errori di marcatura)
 
@@ -160,7 +190,9 @@ per-progetto, fuori dal plugin:
 
 - Flag di sessione e chiave HMAC: `~/.claude/.danilov-state/`
 - File del goal: `~/.claude/projects/<cwd-encoded>/DanilovGoal/<session_id>.md`
-  (co-locato con i transcript, ripreso dal resume, isolato per sessione)
+  (master; i castelli nominati accanto: `<session_id>.castle-<slug>.md`,
+  i sotto-piani ricorsivi: `<base>.sub<bit>.md` — co-locati con i transcript,
+  ripresi dal resume, isolati per sessione)
 
 Gli hook risolvono gli script via `__dirname` (dentro il plugin) e lo stato via
 `CLAUDE_CONFIG_DIR`/`~/.claude`. Override possibile con `CLAUDE_CONFIG_DIR`.

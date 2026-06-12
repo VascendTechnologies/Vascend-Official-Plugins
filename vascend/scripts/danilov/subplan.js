@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// Crea un SOTTO-PIANO (sub-goal) per un macro-task del master.
-// Un piano gerarchico ha due livelli: il master (macro-task = i suoi bit) e, per
-// ogni macro-task, un sotto-piano con i propri micro-task (bit propri). Il
-// macro-bit del master si accende SOLO quando il suo sotto-piano e' conforme
-// (roll-up garantito da mark.js). La relazione master->sub e' implicita nel
-// naming: <sid>.sub<macroBit>.md accanto al master <sid>.md.
+// Crea un SOTTO-PIANO (sub-goal) per un macro-task di un piano QUALSIASI.
+// La gerarchia e' RICORSIVA a profondita' libera: il padre puo' essere il
+// master (<sid>.md), un castello nominato (<sid>.castle-<slug>.md) o un altro
+// sotto-piano. Il bit del padre si accende SOLO quando il suo sotto-piano e'
+// conforme (roll-up garantito da mark.js, livello per livello). La relazione
+// padre->figlio e' implicita nel naming: <base-padre>.sub<bit>.md.
 //
-// Uso:  node subplan.js <macroBit> "<titolo>" "t01: micro" "t02: micro" ...
-//       macroBit = bit del macro-task nel master (0-based; T01 -> 0).
+// Uso:
+//   node subplan.js <macroBit> "<titolo>" "t01: micro" ...            (padre = master)
+//   node subplan.js <padre.md> <macroBit> "<titolo>" "t01: micro" ... (padre esplicito)
+//       macroBit = bit del macro-task nel padre (0-based; T01 -> 0).
 //
 // Come plan.js, NON si edita il file a mano: i micro si accendono con mark.js
 // passando il file del sub, e la Trace e' firmata.
@@ -15,80 +17,64 @@
 
 const fs = require('fs');
 const path = require('path');
-const { hex, parsePlanTask } = require('./core.js');
-const { goalFile, subGoalFile, goalDir } = require('./session.js');
+const { hex } = require('./core.js');
+const { buildPlanMd } = require('./scaffold.js');
+const { goalFile, childGoalFile, listDescendants, goalDir } = require('./session.js');
 
 const argv = process.argv.slice(2);
+
+// Primo argomento: bit (padre = master) oppure path del piano padre.
+let parent;
+if (argv.length && /^\d+$/.test(argv[0])) parent = goalFile(process.cwd());
+else parent = argv.shift();
+
 const macroBit = parseInt(argv.shift(), 10);
 const title = argv.shift();
 const tasks = argv;
 
 if (!Number.isInteger(macroBit) || macroBit < 0 || macroBit > 29) {
-  console.error('Uso: node subplan.js <macroBit 0..29> "<titolo>" "t01: micro" "t02: micro" ...');
+  console.error('Uso: node subplan.js [padre.md] <macroBit 0..29> "<titolo>" "t01: micro" "t02: micro" ...');
   process.exit(1);
 }
 if (!title || tasks.length < 1) {
-  console.error('Uso: node subplan.js <macroBit> "<titolo>" "t01: micro" "t02: micro" ...');
+  console.error('Uso: node subplan.js [padre.md] <macroBit> "<titolo>" "t01: micro" "t02: micro" ...');
   process.exit(1);
 }
 if (tasks.length > 30) {
-  console.error(`Troppi micro-task (${tasks.length}): massimo 30 bit. Raggruppa.`);
+  console.error(`Troppi micro-task (${tasks.length}): massimo 30 bit. Scomponi in un livello ulteriore (subplan.js sul sub).`);
   process.exit(1);
 }
 
-const master = goalFile(process.cwd());
-if (!fs.existsSync(master)) {
-  console.error('Master DanilovGoal inesistente: crea prima il piano con plan.js.');
+if (!parent || !fs.existsSync(parent)) {
+  console.error(`Piano padre inesistente: ${parent || '(master di sessione)'} — crea prima il piano (plan.js o castle.js).`);
   process.exit(1);
 }
-// Il macro-bit deve appartenere al piano del master (stanza esistente).
-const masterText = fs.readFileSync(master, 'utf8');
-const mt = (masterText.match(/MASK_TARGET\s*=\s*(0x[0-9a-fA-F]+)/) || [])[1];
+// Il macro-bit deve appartenere al piano del padre (stanza esistente).
+const parentText = fs.readFileSync(parent, 'utf8');
+const mt = (parentText.match(/MASK_TARGET\s*=\s*(0x[0-9a-fA-F]+)/) || [])[1];
 if (mt && (((1 << macroBit) >>> 0) & parseInt(mt, 16)) === 0) {
-  console.error(`macroBit ${macroBit} (${hex((1 << macroBit) >>> 0)}) fuori dal piano master (MASK_TARGET=${mt}).`);
+  console.error(`macroBit ${macroBit} (${hex((1 << macroBit) >>> 0)}) fuori dal piano padre (MASK_TARGET=${mt}).`);
   process.exit(1);
 }
 
-const TOT = tasks.length;
-const MASK = ((1 << TOT) >>> 0) - 1;
-const ts = new Date().toISOString().slice(0, 19).replace('T', ' ');
 const macroLabel = 'T' + String(macroBit + 1).padStart(2, '0');
-const parsed = tasks.map(parsePlanTask);
-const planRows = parsed
-  .map((p, i) => `| ${i} | ${hex((1 << i) >>> 0)} | ${p.desc} | ${p.dep} |`)
-  .join('\n');
-
-const md = `# DanilovGoal[sub]: ${title}
-Master: ${path.basename(master)}
-MacroBit: ${macroBit}  (${macroLabel})
-Creato: ${ts}
-
-## 1. Pianificazione
-
-| bit | mask | task | dep |
-| --- | ---- | ---- | --- |
-${planRows}
-
-MASK_TARGET = ${hex(MASK)}
-TOT_BIT: ${TOT}
-
-## 2. Trace
-| ts | bit | mask | pre | post | esito | sig | nota |
-|----|-----|------|-----|------|-------|-----|------|
-
-## 3. Validazione
-(compilata a fine corsa dal validatore deterministico validate.js)
-
-## 4. Riepilogo visivo
-(placeholder: i micro-task mancanti compaiono qui se validate=FALSE)
-`;
+const { TOT, MASK, md } = buildPlanMd({
+  title, tasks, sub: true,
+  headerLines: [`Master: ${path.basename(parent)}`, `MacroBit: ${macroBit}  (${macroLabel})`],
+});
 
 fs.mkdirSync(goalDir(process.cwd()), { recursive: true });
-const file = subGoalFile(process.cwd(), undefined, macroBit);
+const file = childGoalFile(parent, macroBit);
+
+// Ricreare un sub invalida i SUOI discendenti (stato, non codice).
+let dropped = 0;
+if (fs.existsSync(file)) {
+  for (const d of listDescendants(file)) { try { fs.rmSync(d.file, { force: true }); dropped++; } catch {} }
+}
 fs.writeFileSync(file, md, 'utf8');
 
 const markPath = path.join(__dirname, 'mark.js').replace(/\\/g, '/');
 const fileP = file.replace(/\\/g, '/');
-console.log(`sotto-piano di ${macroLabel} (macroBit ${macroBit}): ${TOT} micro-task, MASK_TARGET=${hex(MASK)} -> ${file}`);
+console.log(`sotto-piano di ${macroLabel} (macroBit ${macroBit}) in ${path.basename(parent)}: ${TOT} micro-task, MASK_TARGET=${hex(MASK)} -> ${file}${dropped ? ` (rimossi ${dropped} discendenti obsoleti)` : ''}`);
 console.log(`marca i micro:  node ${markPath} ${fileP} <bit> OK`);
-console.log(`a sub completo: node ${markPath} ${macroBit} OK   (sul master; mark.js verifica il roll-up)`);
+console.log(`a sub completo: node ${markPath} ${parent.replace(/\\/g, '/')} ${macroBit} OK   (sul padre; mark.js verifica il roll-up)`);

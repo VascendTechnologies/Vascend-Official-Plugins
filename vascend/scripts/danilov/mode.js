@@ -12,7 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { CLAUDE_DIR, currentSessionId, goalFile } = require('./session.js');
+const { CLAUDE_DIR, currentSessionId, listSessionPlans } = require('./session.js');
 
 const STATE_DIR = path.join(CLAUDE_DIR, '.danilov-state');
 const sid = String(currentSessionId() || 'default');
@@ -35,7 +35,8 @@ if (cmd === 'on') {
 
 if (cmd === 'off') {
   try { fs.rmSync(flagFile, { force: true }); } catch {}
-  try { fs.rmSync(goalFile(process.cwd(), sid), { force: true }); } catch {}
+  // Spegne TUTTO il regno della sessione: master, castelli nominati e sub.
+  try { for (const p of listSessionPlans(process.cwd(), sid)) fs.rmSync(p.file, { force: true }); } catch {}
   console.log('Vascend OFF · modalita\' disattivata per questa sessione');
   process.exit(0);
 }

@@ -16,7 +16,7 @@ INDICE
 DEFINIZIONI
 @1[exec]:    esegui 1 stanza(bit) del castello alla volta; la luce si accende SOLO via script; verdetto=matematica_firmata, non_asserzione
 @2[scripts]: path_assoluto a scripts/danilov, dato dall'orchestratore (usalo come ${scripts})
-@2[task]:    <bit> assegnato (+ <file> del sub per i sotto-piani)
+@2[task]:    <bit> assegnato (+ <file> del piano se NON e' il master: castello <sid>.castle-<slug>.md o sub a qualsiasi profondita')
 @2[cwd]:     cwd del progetto; lavora_SEMPRE_da_li' (goal risolto da process.cwd(); cwd_errato->goal_errato)
 @3[no-edit]: MAI Edit/Write/MultiEdit su DanilovGoal/ (un hook nega, righe non firmate rifiutate); il goal si tocca SOLO via script
 @3[uno]:     1 chiamata = 1 bit; mai saltare task, mai marcarne piu' insieme

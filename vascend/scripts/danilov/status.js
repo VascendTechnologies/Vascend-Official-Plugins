@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// Vista di stato del DanilovGoal di sessione — sorgente per la "todo nativa".
-// Legge il goal (piano + Trace firmata), ricava per ogni task se e' acceso
+// Vista di stato del DanilovGoal — sorgente per la "todo nativa".
+// Legge un piano (piano + Trace firmata), ricava per ogni task se e' acceso
 // (done), fallito (fail) o ancora al buio, marca il prossimo da fare (next) e
-// stampa la lista. Se un macro-task ha un SOTTO-PIANO (sid.sub<bit>.md), espande
-// i suoi micro-task come albero. Pensato per la todo list nativa dell'harness:
+// stampa la lista. Se un task ha un SOTTO-PIANO (<base>.sub<bit>.md), espande
+// i suoi micro-task come albero — RICORSIVO a ogni profondita'. Con --all la
+// vista copre l'intero REGNO (master + castelli nominati).
 //
 //   node status.js            -> JSON {ok, plan, state, target, validate, tasks:[...]}
 //   node status.js --todo     -> JSON {ok, todos:[{content,status,activeForm}]}
 //                                (macro + micro indentati; status ∈ pending|in_progress|completed)
 //   node status.js --pretty   -> albero testuale [x]/[ ] (macro -> micro) per la chat
+//   node status.js --all      -> come sopra ma su TUTTI i castelli della sessione
 //
 // Il verdetto resta di validate.js: questo script NON lo emette, riflette solo
 // lo stato corrente. Fonte unica = core.js (stessa matematica del validatore).
@@ -16,22 +18,14 @@
 
 const fs = require('fs');
 const { computeVerdict, hex, taskLabel } = require('./core.js');
-const { goalFile, subGoalFile } = require('./session.js');
+const { goalFile, listChildGoals } = require('./session.js');
+const { kingdomVerdict, rootLabel } = require('./kingdom.js');
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(`--${name}`);
-const file = argv.find(a => !a.startsWith('--')) || goalFile(process.cwd());
+const all = flag('all');
 
 function out(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
-
-if (!file || !fs.existsSync(file)) {
-  out({ ok: false, error: 'nessun DanilovGoal per questa sessione', file: String(file || '') });
-  process.exit(1);
-}
-
-const text = fs.readFileSync(file, 'utf8');
-// Titolo: master "# DanilovGoal:" o sub "# DanilovGoal[sub]:".
-const title = (text.match(/^#\s*DanilovGoal(?:\[sub\])?:\s*(.+)$/m) || [])[1] || '(senza titolo)';
 
 // Task dichiarati: dal blocco "## 1. Pianificazione" fino a "## 2. Trace".
 // Righe piano = | bit | mask | task | (3 celle). La Trace ha 7 celle: esclusa.
@@ -69,7 +63,9 @@ function traceNotes(src) {
   return notes;
 }
 
-// Righe di stato di un singolo piano (master o sub), senza ricorsione.
+const titleOf = (src) => (src.match(/^#\s*DanilovGoal(?:\[sub\])?:\s*(.+)$/m) || [])[1] || '(senza titolo)';
+
+// Righe di stato di un singolo piano, senza ricorsione.
 function rowsOf(src, verdict) {
   const tasks = planTasks(src);
   const notes = traceNotes(src);
@@ -83,55 +79,113 @@ function rowsOf(src, verdict) {
   });
 }
 
-const v = computeVerdict(text);
-const rows = rowsOf(text, v);
-
-// Espansione gerarchica: per ogni macro-task con sotto-piano, allega i micro.
-for (const r of rows) {
-  const sub = subGoalFile(process.cwd(), undefined, r.bit);
-  if (!fs.existsSync(sub)) continue;
-  const subText = fs.readFileSync(sub, 'utf8');
-  const sv = computeVerdict(subText);
-  r.sub = {
-    title: (subText.match(/^#\s*DanilovGoal(?:\[sub\])?:\s*(.+)$/m) || [])[1] || '',
-    popcount: sv.popcount,
-    validate: sv.validate,
-    micro: rowsOf(subText, sv),
-  };
+// Espansione gerarchica RICORSIVA: per ogni task con sotto-piano, allega i
+// micro (che a loro volta possono avere figli: profondita' libera).
+function expandPlan(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  const v = computeVerdict(text);
+  const rows = rowsOf(text, v);
+  const children = new Map(listChildGoals(file).map(c => [c.bit, c.file]));
+  for (const r of rows) {
+    const cf = children.get(r.bit);
+    if (!cf || !fs.existsSync(cf)) continue;
+    const child = expandPlan(cf);
+    r.sub = { title: child.title, popcount: child.v.popcount, validate: child.v.validate, micro: child.rows };
+  }
+  return { file, title: titleOf(text), v, rows };
 }
 
-if (flag('todo')) {
-  const todos = [];
+// Todo flat di un piano espanso, con indentazione per profondita'.
+function todosOf(rows, depth, acc) {
   for (const r of rows) {
-    todos.push({
-      content: `${r.sub ? `${r.desc}  (sub ${r.sub.popcount})` : r.desc}${r.note ? ` — ${r.note}` : ''}`,
+    const ind = '    '.repeat(depth);
+    acc.push({
+      content: `${ind}${depth ? '↳ ' : ''}${r.sub ? `${r.desc}  (sub ${r.sub.popcount})` : r.desc}${r.note ? ` — ${r.note}` : ''}`,
       status: r.status,
-      activeForm: r.desc.replace(/^(T\d+):\s*/, 'In corso $1: '),
+      activeForm: depth ? `In corso ${r.desc}` : r.desc.replace(/^(T\d+):\s*/, 'In corso $1: '),
     });
-    if (r.sub) for (const m of r.sub.micro) {
-      todos.push({
-        content: `    ↳ ${m.desc}${m.note ? ` — ${m.note}` : ''}`,
-        status: m.status,
-        activeForm: `In corso ${m.desc}`,
-      });
+    if (r.sub) todosOf(r.sub.micro, depth + 1, acc);
+  }
+  return acc;
+}
+
+// Pretty di un piano espanso, ricorsivo.
+function prettyOf(rows, depth, acc) {
+  const mk = r => r.done ? '[x]' : (r.fail ? '[!]' : '[ ]');
+  const arr = r => r.status === 'in_progress' ? '  <- prossima' : '';
+  const dl = r => r.dep ? ` dep:${r.dep.split(',').map(d => taskLabel(parseInt(d, 10))).join(',')}` : '';
+  const ind = '      '.repeat(depth);
+  for (const r of rows) {
+    acc.push(`${ind}${mk(r)} ${r.task} ${r.mask}  ${r.desc}${dl(r)}${r.note ? ` · ${r.note}` : ''}${arr(r)}`);
+    if (r.sub) {
+      acc.push(`${ind}      sub ${r.sub.popcount} [${r.task}]: ${r.sub.title}`);
+      prettyOf(r.sub.micro, depth + 1, acc);
     }
   }
-  out({ ok: true, plan: title, todos });
+  return acc;
+}
+
+// --- Vista REGNO (--all): tutti i castelli della sessione --------------------
+if (all) {
+  const k = kingdomVerdict(process.cwd());
+  if (!k.exists) {
+    out({ ok: false, error: 'nessun castello per questa sessione' });
+    process.exit(1);
+  }
+  const castles = k.roots.map(r => ({ root: r, x: expandPlan(r.file) }));
+
+  if (flag('todo')) {
+    const todos = [];
+    for (const { root, x } of castles) {
+      todos.push({ content: `[${rootLabel(root)}] ${x.title}  (${x.v.popcount})`, status: x.v.conforme ? 'completed' : 'in_progress', activeForm: `In corso ${x.title}` });
+      todosOf(x.rows, 1, todos);
+    }
+    out({ ok: true, plan: `regno ${k.popcount}`, todos });
+    process.exit(0);
+  }
+  if (flag('pretty')) {
+    const lines = [`Regno: ${k.roots.length} castelli  (${k.popcount})`];
+    for (const { root, x } of castles) {
+      lines.push(`${x.v.conforme ? '[x]' : '[ ]'} ${rootLabel(root)}: ${x.title}  (${x.v.popcount})${root.after ? `  after:${root.after}` : ''}`);
+      prettyOf(x.rows, 1, lines);
+    }
+    lines.push(`validate(regno) = ${k.conforme ? 'TRUE' : 'FALSE'}  (lo emette validate.js --kingdom)`);
+    process.stdout.write(lines.join('\n') + '\n');
+    process.exit(0);
+  }
+  out({
+    ok: true,
+    popcount: k.popcount,
+    validate: k.conforme,
+    castles: castles.map(({ root, x }) => ({
+      kind: root.kind, slug: root.slug, title: x.title, after: root.after || null,
+      state: hex(x.v.state), target: x.v.target != null ? hex(x.v.target) : null,
+      validate: x.v.validate, popcount: x.v.popcount, tasks: x.rows,
+    })),
+  });
+  process.exit(0);
+}
+
+// --- Vista piano singolo (default: master di sessione) -----------------------
+const file = argv.find(a => !a.startsWith('--')) || goalFile(process.cwd());
+
+if (!file || !fs.existsSync(file)) {
+  out({ ok: false, error: 'nessun DanilovGoal per questa sessione', file: String(file || '') });
+  process.exit(1);
+}
+
+const x = expandPlan(file);
+const v = x.v;
+const rows = x.rows;
+
+if (flag('todo')) {
+  out({ ok: true, plan: x.title, todos: todosOf(rows, 0, []) });
   process.exit(0);
 }
 
 if (flag('pretty')) {
-  const mk = r => r.done ? '[x]' : (r.fail ? '[!]' : '[ ]');
-  const arr = r => r.status === 'in_progress' ? '  <- prossima' : '';
-  const dl = r => r.dep ? ` dep:${r.dep.split(',').map(d => taskLabel(parseInt(d, 10))).join(',')}` : '';
-  const lines = [`DanilovGoal: ${title}  (master ${v.popcount})`];
-  for (const r of rows) {
-    lines.push(`${mk(r)} ${r.task} ${r.mask}  ${r.desc}${dl(r)}${r.note ? ` · ${r.note}` : ''}${arr(r)}`);
-    if (r.sub) {
-      lines.push(`      sub ${r.sub.popcount} [${r.task}]: ${r.sub.title}`);
-      for (const m of r.sub.micro) lines.push(`      ${mk(m)} ${m.task} ${m.mask}  ${m.desc}${dl(m)}${m.note ? ` · ${m.note}` : ''}${arr(m)}`);
-    }
-  }
+  const lines = [`DanilovGoal: ${x.title}  (master ${v.popcount})`];
+  prettyOf(rows, 0, lines);
   lines.push(`validate(state) = ${v.validate === true ? 'TRUE' : 'FALSE'}  (lo emette validate.js)`);
   process.stdout.write(lines.join('\n') + '\n');
   process.exit(0);
@@ -139,7 +193,7 @@ if (flag('pretty')) {
 
 out({
   ok: true,
-  plan: title,
+  plan: x.title,
   state: hex(v.state),
   target: v.target != null ? hex(v.target) : null,
   validate: v.validate,
