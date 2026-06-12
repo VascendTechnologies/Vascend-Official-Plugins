@@ -121,4 +121,22 @@ function planRow(file, bit) {
 
 function planDesc(file, bit) { const c = planRow(file, bit); return c ? c[3] : ''; }
 
-module.exports = { kingdomPlans, kingdomVerdict, nextRoom, rootLabel, afterOf, titleOf };
+// Tutti i task dichiarati di un piano: [{bit, mask, desc, dep}] (per kanban e
+// viste; stessa tolleranza 3/4 colonne del resto del motore).
+function planTasksOf(file) {
+  let text; try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
+  const start = text.search(/^##\s*1\.\s*Pianificazione/m);
+  const end = text.search(/^##\s*2\.\s*Trace/m);
+  const block = text.slice(start < 0 ? 0 : start, end < 0 ? text.length : end);
+  const out = [];
+  for (const line of block.split('\n')) {
+    const c = line.split('|').map(s => s.trim());
+    if (c.length !== 5 && c.length !== 6) continue;
+    const bit = parseInt(c[1], 10);
+    if (!Number.isInteger(bit)) continue;
+    out.push({ bit, mask: (1 << bit) >>> 0, desc: c[3], dep: c.length === 6 && c[4] !== '-' ? c[4] : '' });
+  }
+  return out.sort((a, b) => a.bit - b.bit);
+}
+
+module.exports = { kingdomPlans, kingdomVerdict, nextRoom, rootLabel, afterOf, titleOf, planTasksOf };

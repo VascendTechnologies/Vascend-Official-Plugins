@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// SessionStart Hook: fa emergere un DanilovGoal APERTO lasciato da un'altra
-// sessione per lo STESSO progetto (cwd), cosi' un task lungo non si perde
-// cambiando sessione. Nudge SOLO se la sessione corrente non ha gia' un goal
-// aperto. Delega la verita' a resume.js --json (singola fonte). Best-effort:
-// non blocca mai, in caso di errore fa pass-through silenzioso.
+// SessionStart Hook, due mestieri:
+//  - source=compact: il contesto e' APPENA stato compattato -> reinietta la
+//    card del regno vivo (stdout diventa additionalContext) cosi' il goal non
+//    si perde nel summary. E' la meta' "ripristina" di vascend-precompact.js
+//    (che al PreCompact aveva fissato la foto in .vascend-compact.md).
+//  - altri source: fa emergere un DanilovGoal APERTO lasciato da un'altra
+//    sessione per lo STESSO progetto (cwd). Nudge SOLO se la sessione corrente
+//    non ha gia' un goal aperto. Delega la verita' a resume.js --json.
+// Best-effort: non blocca mai, in caso di errore pass-through silenzioso.
 //
 // Codice nel plugin (__dirname = <plugin>/hooks -> ../scripts/danilov);
 // lo stato resta in ~/.claude via session.js.
@@ -26,6 +30,27 @@ process.stdin.on('end', () => {
     const data = JSON.parse(input || '{}');
     const cwd = data.cwd || process.cwd();
     const sid = data.session_id || process.env.CLAUDE_CODE_SESSION_ID || '';
+
+    // --- POST-COMPATTAZIONE: reinietta il regno vivo nel contesto fresco ---
+    if (data.source === 'compact') {
+      try {
+        const { kingdomVerdict, nextRoom } = require(path.join(DANILOV, 'kingdom.js'));
+        const k = kingdomVerdict(cwd, sid);
+        if (k.exists && !k.conforme && ui && ui.card) {
+          const rows = [ui.kv('Regno', `${k.openRoots.length}/${k.roots.length} castelli al buio ${ui.G.dot} ${k.popcount} stanze`)];
+          for (const r of k.openRoots.slice(0, 4)) {
+            const dark = (r.v.missingTasks || []).map(t => t.task).slice(0, 6).join(', ');
+            rows.push(ui.kv((r.kind === 'castle' ? r.slug : 'master').slice(0, 9), `${r.v.popcount}${dark ? ` ${ui.G.dot} ${dark}` : ''}`));
+          }
+          const next = nextRoom(cwd, sid);
+          if (next) rows.push(ui.kv('Prossima', `${next.task} ${next.mask} in ${next.trail.join(' > ')}`));
+          rows.push(ui.kv('Checkpoint', '.vascend-compact.md (foto PreCompact): rileggilo prima di continuare'));
+          rows.push(ui.kv('Regola', 'il goal continua: mark.js per le stanze, validate.js --kingdom per chiudere'));
+          process.stdout.write('\n' + ui.card(`vascend ${ui.G.dot} regno vivo dopo la compattazione`, rows));
+        }
+      } catch {}
+      process.exit(0); // post-compact: niente nudge cross-sessione
+    }
 
     // resume.js risolve la sessione da CLAUDE_CODE_SESSION_ID: passaglielo.
     const env = { ...process.env };

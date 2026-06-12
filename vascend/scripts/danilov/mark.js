@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { deriveState, computeVerdict, hex, taskLabel } = require('./core.js');
-const { goalFile, childGoalFile } = require('./session.js');
+const { goalFile, childGoalFile, notesFile, writeGoalAtomic, acquireGoalLock, releaseGoalLock } = require('./session.js');
 const { signRow } = require('./crypto.js');
 
 // Flag: --dry (anteprima), --force (bypassa il gate dipendenze), --note "<t>"
@@ -65,6 +65,14 @@ if (!Number.isInteger(bit) || bit < 0 || bit > 29) {
 }
 const esito = String(esitoArg || 'OK').toUpperCase() === 'FAIL' ? 'FAIL' : 'OK';
 const mask = (1 << bit) >>> 0;
+
+// Lock anti-race (solo marcatura reale): due mark concorrenti sullo stesso
+// file (subagenti in parallelo) senza lock perderebbero righe di Trace.
+// Rilascio via process.on('exit'): copre anche gli exit anticipati dei gate.
+if (!dry) {
+  const lockDir = acquireGoalLock(file);
+  process.on('exit', () => releaseGoalLock(lockDir));
+}
 
 const text = fs.readFileSync(file, 'utf8');
 const { state: pre, lastSig, tampered } = deriveState(text);
@@ -206,12 +214,16 @@ if (depMissing.length && !force) {
 // (exit 0). Vale per OK (un FAIL registra comunque il fallimento). Eseguito nel
 // cwd: cosi' "fatto" e' verificato da un test/comando reale, non asserito.
 if (check != null && esito === 'OK') {
+  // Timeout: un gate appeso (test interattivo, rete) non deve bloccare il
+  // mark per sempre. Configurabile via DANILOV_CHECK_TIMEOUT (ms).
+  const checkTimeout = parseInt(process.env.DANILOV_CHECK_TIMEOUT, 10) || 120000;
   try {
-    execSync(check, { stdio: 'pipe', cwd: process.cwd() });
+    execSync(check, { stdio: 'pipe', cwd: process.cwd(), timeout: checkTimeout });
     console.log(`gate OK: "${check}"`);
   } catch (e) {
     const tail = ((e.stdout ? e.stdout.toString() : '') + (e.stderr ? e.stderr.toString() : '')).trim();
-    console.error(`gate FALLITO per ${taskLabel(bit)}: "${check}" (exit ${e.status == null ? '?' : e.status}) -> bit NON acceso.`);
+    const why = e.signal === 'SIGTERM' ? `timeout ${checkTimeout}ms` : `exit ${e.status == null ? '?' : e.status}`;
+    console.error(`gate FALLITO per ${taskLabel(bit)}: "${check}" (${why}) -> bit NON acceso.`);
     if (tail) console.error('  ' + tail.split('\n').slice(-5).join('\n  '));
     process.exit(1);
   }
@@ -234,9 +246,28 @@ if (lastTableIdx === -1) {
   process.exit(1);
 }
 lines.splice(lastTableIdx + 1, 0, row);
-fs.writeFileSync(file, lines.join('\n'), 'utf8');
+writeGoalAtomic(file, lines.join('\n'));
 
 const verb = esito === 'OK' ? 'completato' : 'FALLITO';
 const tail = esito === 'OK' ? '' : ' (bit non acceso)';
 console.log(`${verb} ${taskLabel(bit)} ${hex(mask)} | state ${hex(pre)} -> ${hex(post)}${tail} | ${esito}${noteClean ? ` | nota: ${noteClean}` : ''}`);
+
+// Appunti del piano: dossier libero per stanza (Write/Edit ammessi: il
+// protect hook esenta *.notes.md). La colonna --note resta per la sintesi;
+// qui vive il dettaglio (analisi, brainstorming, esiti, link).
+console.log(`appunti: ${notesFile(file).replace(/\\/g, '/')}${fs.existsSync(notesFile(file)) ? '' : ' (da creare, Write libero)'}`);
+
+// Checkpoint di contesto PIANIFICATI (DANILOV_COMPACT_HINT=0 per zittire):
+//  - un task marcato @compact nel piano = "dopo questo step, compatta";
+//  - un piano appena ILLUMINATO e' il confine naturale di un'unita' di lavoro.
+// L'hint e' deterministico (esce dallo script, non dall'agente); la foto del
+// regno la scatta il PreCompact hook al momento della compattazione vera.
+if (esito === 'OK' && process.env.DANILOV_COMPACT_HINT !== '0') {
+  const planned = /@compact\b/i.test(planDesc(bit) || '');
+  const lit = mt != null && post === (parseInt(mt, 16) >>> 0);
+  if (planned || lit) {
+    const why = planned ? `checkpoint pianificato su ${taskLabel(bit)} (@compact)` : 'piano illuminato: confine di unita\' di lavoro';
+    console.log(`compact: ${why} -> punto ideale per compattare il contesto (/vascend-compact, poi /compact)`);
+  }
+}
 process.exit(0);

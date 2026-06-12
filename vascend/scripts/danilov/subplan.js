@@ -18,8 +18,8 @@
 const fs = require('fs');
 const path = require('path');
 const { hex } = require('./core.js');
-const { buildPlanMd } = require('./scaffold.js');
-const { goalFile, childGoalFile, listDescendants, goalDir } = require('./session.js');
+const { buildPlanMd, buildNotesMd } = require('./scaffold.js');
+const { goalFile, childGoalFile, listDescendants, notesFile, writeGoalAtomic, goalDir } = require('./session.js');
 
 const argv = process.argv.slice(2);
 
@@ -71,7 +71,12 @@ let dropped = 0;
 if (fs.existsSync(file)) {
   for (const d of listDescendants(file)) { try { fs.rmSync(d.file, { force: true }); dropped++; } catch {} }
 }
-fs.writeFileSync(file, md, 'utf8');
+writeGoalAtomic(file, md);
+
+const nfSub = notesFile(file);
+if (!fs.existsSync(nfSub)) {
+  try { fs.writeFileSync(nfSub, buildNotesMd({ title, tasks, planName: path.basename(file) }), 'utf8'); } catch {}
+}
 
 const markPath = path.join(__dirname, 'mark.js').replace(/\\/g, '/');
 const fileP = file.replace(/\\/g, '/');

@@ -24,9 +24,9 @@ const STATE_DIR = path.join(CLAUDE_DIR, '.danilov-state');
 // Codice: dentro il plugin. __dirname = <plugin>/hooks -> ../scripts/danilov.
 const DANILOV = path.join(__dirname, '..', 'scripts', 'danilov');
 const scriptsPath = DANILOV.replace(/\\/g, '/'); // path POSIX-style per i messaggi all'agente
-const { goalDir, goalFile, currentSessionId } = require(path.join(DANILOV, 'session.js'));
+const { goalDir, goalFile, listSessionPlans, writeGoalAtomic, currentSessionId } = require(path.join(DANILOV, 'session.js'));
 const ui = require(path.join(DANILOV, 'ui.js'));
-const { computeVerdict } = require(path.join(DANILOV, 'core.js'));
+const { kingdomVerdict } = require(path.join(DANILOV, 'kingdom.js'));
 
 const SKELETON = `# DanilovGoal: (in attesa di pianificazione)
 ## 1. Pianificazione
@@ -119,7 +119,14 @@ const INSTRUCTIONS =
   '`<azione> <target>>obiettivo | nota`. Il pensiero esteso lo affidi al file. ' +
   'Se sopra compaiono "memorie rilevanti", LEGGILE e tienine conto nel piano ' +
   '(cosa e\' gia\' stato deciso/imparato/rotto sul tema) PRIMA di scrivere plan.js; ' +
-  'registra le nuove decisioni e lezioni con azioni decide/learn/bug/rootcause.';
+  'registra le nuove decisioni e lezioni con azioni decide/learn/bug/rootcause. ' +
+  'Obiettivo con piu\' workstream? CASTELLI MULTIPLI: `castle.js new <slug> "<titolo>" "T01: ..." ' +
+  '[--after <slug>]` (illimitati), micro-task ricorsivi con `subplan.js [padre.md] <bit> ...`, ' +
+  'verdetto del regno con `validate.js --kingdom`, prossima stanza con `castle.js next`. ' +
+  'Marca un task `@compact` nel piano = dopo quello step compatta il contesto. ' +
+  'Obiettivo BUSINESS? Regno in fasi: castello analisi -> struttura (--after) -> esecuzione; ' +
+  'APPUNTI ricchi per stanza nel dossier `<piano>.notes.md` (Write/Edit liberi, il protect li esenta); ' +
+  'board visiva: `castle.js kanban --write` -> VASCEND_KANBAN.md.';
 
 // Promemoria breve per i turni SUCCESSIVI della stessa sessione sticky: il blocco
 // INSTRUCTIONS completo (~300 token) si inietta una volta sola, non a ogni prompt.
@@ -193,10 +200,12 @@ process.stdin.on('end', () => {
     const isKeyword = !slash && TRIGGERS.some(re => re.test(prompt));
     const isPlain = !slash && !isKeyword; // prompt "normale"
 
-    // --- OFF: spegne enforcement, sticky e goal della sessione (toggle istantaneo) ---
+    // --- OFF: spegne enforcement, sticky e l'INTERO REGNO della sessione ---
+    // (master + castelli nominati + sub: lasciarli orfani farebbe riaffiorare
+    // il regno nel resume e nell'enforcement alla prossima attivazione)
     if (isOff) {
       try { fs.rmSync(flagFile, { force: true }); } catch {}
-      try { fs.rmSync(goalFile(cwd, sid), { force: true }); } catch {}
+      try { for (const p of listSessionPlans(cwd, sid)) fs.rmSync(p.file, { force: true }); } catch {}
       blockPrompt('[Vascend] Modalita\' Vascend disattivata per questa sessione (sticky OFF).');
       return;
     }
@@ -227,23 +236,22 @@ process.stdin.on('end', () => {
       fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: stickyOn, instructed: true, cwd, ts: Date.now() }), 'utf8');
     } catch {}
 
-    // Goal skeleton: un nuovo obiettivo resetta; ma un goal IN CORSO (piano con
-    // MASK_TARGET presente e NON ancora conforme) NON va azzerato, altrimenti un
-    // prompt a meta' obiettivo (es. "continua") cancellerebbe piano+trace tra i
-    // turni. Reset solo se il goal manca, e' uno skeleton (niente piano) o e'
-    // gia' conforme (obiettivo precedente concluso -> questo e' nuovo).
+    // Goal skeleton: un nuovo obiettivo resetta; ma un REGNO IN CORSO (almeno
+    // un castello con piano e non conforme — non solo il master) NON va
+    // azzerato, altrimenti un prompt a meta' obiettivo (es. "continua")
+    // cancellerebbe piano+trace tra i turni. Reset solo se il regno manca,
+    // e' uno skeleton (niente piano) o e' gia' tutto conforme (obiettivo
+    // precedente concluso -> questo e' nuovo).
     try {
       fs.mkdirSync(goalDir(cwd), { recursive: true });
       const gf = goalFile(cwd, sid);
       let inProgress = false;
-      if (fs.existsSync(gf)) {
-        try {
-          const v = computeVerdict(fs.readFileSync(gf, 'utf8'));
-          inProgress = v.target != null && !v.conforme; // piano presente e non illuminato
-        } catch {}
-      }
+      try {
+        const k = kingdomVerdict(cwd, sid);
+        inProgress = k.exists && !k.conforme; // un castello aperto ovunque nel regno
+      } catch {}
       const wantReset = (isObjective || (stickyOn && isPlain)) && !inProgress;
-      if (wantReset || !fs.existsSync(gf)) fs.writeFileSync(gf, SKELETON, 'utf8');
+      if (wantReset || !fs.existsSync(gf)) writeGoalAtomic(gf, SKELETON);
     } catch {}
 
     // Reiniezione nel loop (C): memorie rilevanti al tema, se ci sono; altrimenti panoramica.

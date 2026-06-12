@@ -12,6 +12,17 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/vascend-precompact.js\"",
+            "timeout": 6
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

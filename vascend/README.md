@@ -59,7 +59,8 @@ mantiene il flag) e anche a uno stallo; si spegne solo con `/vascend off`,
 
 | Hook | Evento | Ruolo |
 |---|---|---|
-| `vascend-resume.js` | SessionStart | Fa emergere un goal aperto di un'altra sessione (resume cross-sessione); nudge solo se la sessione corrente non ne ha uno. |
+| `vascend-resume.js` | SessionStart | Due mestieri: con `source=compact` reinietta nel contesto appena compattato la card del regno vivo (stanze, prossima); altrimenti fa emergere un goal aperto di un'altra sessione (resume cross-sessione). |
+| `vascend-precompact.js` | PreCompact (manual+auto) | Un attimo prima della compattazione fissa la FOTO deterministica del regno in `.vascend-compact.md` (blocco delimitato, il contenuto manuale resta): il summary non può perdere il goal. |
 | `danilov-trigger.js` | UserPromptSubmit | Rileva `/vascend` o le keyword del metodo; alza il flag di sessione e crea lo scheletro del goal. |
 | `danilov-protect.js` | PreToolUse (Edit/Write/MultiEdit) | Nega le modifiche manuali ai file `DanilovGoal/` (anti-manomissione). |
 | `danilov-goal-audit.js` | Stop | Enforcement sul REGNO: blocca la chiusura del turno finché ogni castello non è conforme; indica la prossima stanza al buio; anti-stallo dopo `DANILOV_MAX_STALL` turni senza stanze nuove in tutto il regno (`0` = persistente, mai rilasciare). |
@@ -92,7 +93,7 @@ divergere sul verdetto:
 - `scaffold.js` — unica fabbrica dello scheletro markdown dei piani (plan/castle/subplan: nessun drift di forma).
 - `ui.js` — rendering delle card nei messaggi degli hook.
 - `plan.js` / `mark.js` / `validate.js` — CLI: crea il piano (accetta `@dep:T01,T02` per le dipendenze), accende un bit (`--dry` anteprima, `--note "<t>"` annota, `--check "<cmd>"` gate di verifica, `--force` bypassa dipendenze e gate After), emette il verdetto (`--deep` figli ricorsivi + coerenza roll-up, `--kingdom` tutti i castelli).
-- `castle.js` — **castelli multipli**: `new <slug> … [--after <slug>]`, `list`, `map`, `next` (prossima stanza al buio del regno), `drop`.
+- `castle.js` — **castelli multipli**: `new <slug> … [--after <slug>]` (anti-ciclo sul DAG After), `list`, `map`, `next` (prossima stanza al buio del regno), `drop`, `kanban [--write]` (board fatto/in corso/al buio/fallito → `VASCEND_KANBAN.md`), `mermaid` (grafo del regno).
 - `unmark.js` — annulla una marcatura sbagliata: appende una riga `UNDO` firmata che spegne il bit (append-only, tracciato).
 - `resume.js` — riprende un REGNO aperto di un'altra sessione: `--list`, anteprima, `--attach` (riporta master + castelli + sotto-piani sulla sessione corrente).
 - `mode.js` — interruttore della modalità (`on`/`off`/`status`): scrive il flag sticky in modo deterministico; lo invoca il comando `/vascend on|off`. `off` spegne l'intero regno.
@@ -164,6 +165,25 @@ discendenti, così non si riagganciano per naming ai nuovi bit; i castelli
 nominati sono indipendenti e non vengono toccati da `plan.js`. Il comando
 `/vascend` può delegare la progettazione dei sotto-piani a più sotto-agenti
 in parallelo, poi seguirli con `mark.js`/`status.js`.
+
+### Enterprise: dossier, kanban, checkpoint di contesto
+
+Per obiettivi business ("deploya e trova i clienti") il regno si pianifica in
+fasi in DAG — castello `analisi` → `struttura` (`--after analisi`) → castelli
+esecutivi — e il metodo offre tre strumenti dedicati:
+
+- **Dossier per stanza**: ogni piano nasce con `<piano>.notes.md`, ESENTE dal
+  protect hook (Write/Edit liberi). Scheletro già strutturato: mermaid del
+  piano + scheda Danilov per stanza (`@analisi/@decisioni/@esito`) — note
+  tracciabili, non prosa. Il verdetto resta nella Trace firmata; gli appunti
+  seguono il regno anche nel resume cross-sessione.
+- **Kanban**: `castle.js kanban --write` → `VASCEND_KANBAN.md` con le colonne
+  fatto/in corso/al buio/fallito e la mappa mermaid del regno in fondo.
+- **Checkpoint di contesto pianificati**: un task marcato `@compact` nel piano
+  = "dopo questo step compatta" (mark.js lo ricorda, e avvisa comunque a piano
+  illuminato — `DANILOV_COMPACT_HINT=0` per zittire). Il PreCompact hook
+  fotografa il regno prima di ogni compattazione e SessionStart(compact) lo
+  reinietta dopo: il filo non si perde mai.
 
 ### Annullare e confermare (contro gli errori di marcatura)
 

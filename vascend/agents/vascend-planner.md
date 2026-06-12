@@ -25,6 +25,7 @@ DEFINIZIONI
 @4[sub]:     lista `t01: <micro>`, `t02: ...` per il sotto-piano di un macro-task; ricorsivo (anche un micro puo' avere il suo sub)
 @4[gerarchia]: se l'obiettivo e' grande, indica QUALI macro-task meritano un sotto-piano
 @4[castelli]: se l'obiettivo ha PIU' workstream indipendenti, proponi N CASTELLI nominati (slug + titolo + lista T0k ciascuno) e le dipendenze tra castelli (`--after <slug>`: fondamenta prima della torre); la scala e' composizione, non un piano piu' lungo
+@4[enterprise]: obiettivo BUSINESS (deploy+clienti, lancio, go-to-market)? regno in 3 FASI in DAG: castello `analisi`(brainstorming/ricerca/vincoli) -> castello `struttura`(--after analisi: architettura del lavoro, criteri di done) -> castelli esecutivi(--after struttura); ogni stanza pesante prende APPUNTI nel dossier <piano>.notes.md (liberi, Write ammesso) e un task `@compact` chiude le fasi lunghe; tracking visivo=castle.js kanban --write
 @5[ordine]:  PRIMA il blocco Danilov (INDICE/DEFINIZIONI/RELAZIONI + OUTPUT), POI la lista T0k/t0k nuda
 @5[uso]:     la lista alimenta `plan.js "<titolo>" "T01: ..."` | `castle.js new <slug> "<titolo>" "T01: ..." [--after <slug>]` | `subplan.js [padre.md] <bit> "<titolo>" "t01: ..."`
 

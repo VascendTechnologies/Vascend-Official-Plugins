@@ -129,6 +129,14 @@ function parentOf(file) {
   return m ? m[1] + '.md' : null;
 }
 
+// APPUNTI liberi del piano: file gemello <base>.notes.md, ESENTE dal protect
+// hook -> l'agente li scrive/modifica con Write/Edit normali (markdown ricco,
+// per stanza), mentre piano e Trace restano blindati. Non tocca il verdetto.
+function notesFile(planFile) {
+  return String(planFile).replace(/\.md$/i, '.notes.md');
+}
+const isNotesName = (n) => /\.notes\.md$/i.test(String(n));
+
 // --- Legacy (compat con chiamanti esistenti): figli del MASTER -----------------
 // Sotto-piano (sub-goal) di un macro-bit del master: <sid>.sub<macroBit>.md.
 function subGoalFile(cwd, sessionId, macroBit) {
@@ -137,6 +145,47 @@ function subGoalFile(cwd, sessionId, macroBit) {
 // Elenca i sotto-piani DIRETTI del master di sessione: [{macroBit, file}].
 function listSubGoals(cwd, sessionId) {
   return listChildGoals(goalFile(cwd, sessionId)).map(c => ({ macroBit: c.bit, file: c.file }));
+}
+
+// Scrittura ATOMICA dei file piano: tmp + rename. Un crash o un ENOSPC a
+// meta' write non puo' lasciare il goal troncato (visto succedere: un Edit
+// interrotto da disco pieno azzera il file). rename sullo stesso volume e'
+// atomico anche su Windows (NTFS).
+function writeGoalAtomic(file, text) {
+  const tmp = file + '.tmp-' + process.pid;
+  fs.writeFileSync(tmp, text, 'utf8');
+  try {
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    // Windows: rename su file esistente puo' fallire se il target e' aperto.
+    try { fs.rmSync(file, { force: true }); fs.renameSync(tmp, file); }
+    catch (e2) { try { fs.rmSync(tmp, { force: true }); } catch {} throw e2; }
+  }
+}
+
+// Lock per le scritture read-modify-write (mark/unmark): mkdir e' atomico ed
+// esclusivo su tutti i filesystem. Due marcature concorrenti (subagenti in
+// parallelo) senza lock perderebbero righe di Trace (l'ultima write vince).
+// Lock stantio (> staleMs, es. processo morto) viene rubato.
+function acquireGoalLock(file, opts) {
+  const lockDir = file + '.lock';
+  const tries = (opts && opts.tries) || 60;        // 60 x 50ms = 3s max attesa
+  const waitMs = (opts && opts.waitMs) || 50;
+  const staleMs = (opts && opts.staleMs) || 10000;
+  const sleep = (ms) => { const sab = new SharedArrayBuffer(4); Atomics.wait(new Int32Array(sab), 0, 0, ms); };
+  for (let i = 0; i < tries; i++) {
+    try { fs.mkdirSync(lockDir); return lockDir; } catch {}
+    try {
+      if (Date.now() - fs.statSync(lockDir).mtimeMs > staleMs) {
+        fs.rmdirSync(lockDir); continue; // stantio: ruba e ritenta subito
+      }
+    } catch { continue; } // sparito tra mkdir e stat: ritenta
+    sleep(waitMs);
+  }
+  throw new Error(`lock occupato: ${lockDir} (un'altra marcatura in corso? rimuovi la cartella se e' un residuo)`);
+}
+function releaseGoalLock(lockDir) {
+  try { fs.rmdirSync(lockDir); } catch {}
 }
 
 // sessionId: di solito input.session_id; fallback env.
@@ -157,5 +206,7 @@ module.exports = {
   isDanilovActive, goalDir, goalFile, subGoalFile, listSubGoals,
   castleSlug, castleFile, listCastles,
   childGoalFile, listChildGoals, listDescendants, listSessionPlans, parentOf,
+  notesFile, isNotesName,
+  writeGoalAtomic, acquireGoalLock, releaseGoalLock,
   encodeCwd, currentSessionId, CLAUDE_DIR,
 };

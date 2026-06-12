@@ -15,8 +15,8 @@
 const fs = require('fs');
 const path = require('path');
 const { hex } = require('./core.js');
-const { buildPlanMd } = require('./scaffold.js');
-const { goalFile, goalDir, listDescendants, CLAUDE_DIR, currentSessionId } = require('./session.js');
+const { buildPlanMd, buildNotesMd } = require('./scaffold.js');
+const { goalFile, goalDir, listDescendants, notesFile, writeGoalAtomic, CLAUDE_DIR, currentSessionId } = require('./session.js');
 
 const argv = process.argv.slice(2);
 const title = argv.shift();
@@ -44,7 +44,14 @@ try {
   for (const { file: sf } of listDescendants(file)) { fs.rmSync(sf, { force: true }); dropped++; }
 } catch {}
 
-fs.writeFileSync(file, md, 'utf8');
+writeGoalAtomic(file, md);
+
+// Dossier appunti STRUTTURATO (mermaid + scheda per stanza), solo se non
+// esiste: appunti gia' presi non si clobberano mai.
+const nf = notesFile(file);
+if (!fs.existsSync(nf)) {
+  try { fs.writeFileSync(nf, buildNotesMd({ title, tasks, planName: path.basename(file) }), 'utf8'); } catch {}
+}
 
 // Creare un piano = essere in modalita' goal enforced. Alza il flag della
 // sessione PRESERVANDO lo sticky (impostato da mode.js o dall'hook): cosi'

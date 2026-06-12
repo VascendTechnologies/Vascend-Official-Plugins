@@ -11,7 +11,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const core = require('./core.js');
 const { signRow } = require('./crypto.js');
 
@@ -249,6 +249,91 @@ try {
   let jn = null; try { jn = JSON.parse(r.out.trim().split('\n').pop()); } catch {}
   check('N1 next: punta dentro il regno', !!jn && typeof jn.file === 'string', r.out);
   check('N2 next: la stanza e\' nel sub piu\' profondo aperto o nel master', !!jn && /\.md$/.test(jn.file));
+
+  // === ROBUSTEZZA + HOOK (stessa sandbox env) =================================
+  const HOOKS = path.join(HERE, '..', '..', 'hooks');
+  const runStdin = (script, payload) => {
+    const p = spawnSync('node', [script], { ...opts, input: JSON.stringify(payload), encoding: 'utf8' });
+    return { code: p.status, out: (p.stdout || '') + (p.stderr || '') };
+  };
+
+  // --- Scenario Q: ciclo After rilevato al castle new.
+  R(CASTLE, 'new', 'q1', 'base', 'T01: a');
+  r = R(CASTLE, 'new', 'q2', 'sopra', 'T01: b', '--after', 'q1');
+  check('Q1 catena after lineare: ok', r.code === 0, r.out);
+  r = R(CASTLE, 'new', 'q1', 'base ciclica', 'T01: a', '--after', 'q2');
+  check('Q2 ciclo after: rifiutato', r.code === 1 && /ciclo/i.test(r.out), r.out);
+
+  // --- Scenario R: hint @compact e hint piano-illuminato da mark.js.
+  R(CASTLE, 'new', 'erre', 'con checkpoint', 'T01: lavoro pesante @compact', 'T02: coda');
+  r = R(MARK, cfile('erre'), 0, 'OK');
+  check('R1 @compact: hint al mark del task marcato', /compact: checkpoint pianificato/i.test(r.out), r.out);
+  r = R(MARK, cfile('erre'), 1, 'OK');
+  check('R2 piano illuminato: hint di confine', /compact: piano illuminato/i.test(r.out), r.out);
+
+  // --- Scenario S: lock stantio rubato, lock fresco onorato.
+  R(MARK, cfile('q1'), 0, 'OK'); // apre il gate After di q2 (q1 conforme)
+  const fS = cfile('q2');
+  fs.mkdirSync(fS + '.lock');
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(fS + '.lock', old, old);
+  r = R(MARK, fS, 0, 'OK');
+  check('S1 lock stantio (60s): rubato, mark riesce', r.code === 0, r.out);
+  check('S2 lock rilasciato dopo il mark', !fs.existsSync(fS + '.lock'));
+
+  // --- Scenario T: PreCompact fissa la foto del regno nel checkpoint.
+  r = runStdin(path.join(HOOKS, 'vascend-precompact.js'), { session_id: SID, cwd: proj, trigger: 'auto' });
+  const ck = path.join(proj, '.vascend-compact.md');
+  check('T1 precompact: checkpoint scritto', fs.existsSync(ck), r.out);
+  const ckTxt = fs.existsSync(ck) ? fs.readFileSync(ck, 'utf8') : '';
+  check('T2 precompact: blocco regno presente', /vascend:regno:auto/.test(ckTxt) && /@regno:/.test(ckTxt));
+  // idempotente: ri-eseguire sostituisce il blocco, non lo duplica.
+  runStdin(path.join(HOOKS, 'vascend-precompact.js'), { session_id: SID, cwd: proj, trigger: 'manual' });
+  const ckTxt2 = fs.readFileSync(ck, 'utf8');
+  check('T3 precompact: blocco sostituito non duplicato', (ckTxt2.match(/vascend:regno:auto/g) || []).length === 2, String((ckTxt2.match(/vascend:regno:auto/g) || []).length));
+
+  // --- Scenario U: SessionStart(source=compact) reinietta il regno aperto.
+  r = runStdin(path.join(HOOKS, 'vascend-resume.js'), { session_id: SID, cwd: proj, source: 'compact' });
+  check('U1 post-compact: card regno nel contesto', /regno vivo dopo la compattazione/.test(r.out), r.out.slice(0, 200));
+  check('U2 post-compact: prossima stanza indicata', /Prossima/.test(r.out));
+
+  // --- Scenario W: dossier appunti strutturato (mermaid + schede per stanza).
+  R(CASTLE, 'new', 'doppio', 'enterprise', 'T01: analisi', 'T02: struttura @dep:T01');
+  const nfW = cfile('doppio').replace(/\.md$/, '.notes.md');
+  check('W1 dossier: creato col castello', fs.existsSync(nfW));
+  const nfTxt = fs.existsSync(nfW) ? fs.readFileSync(nfW, 'utf8') : '';
+  check('W2 dossier: mermaid del piano', /```mermaid/.test(nfTxt) && /T01 --> T02/.test(nfTxt), nfTxt.slice(0, 120));
+  check('W3 dossier: scheda Danilov per stanza', /## T01 — /.test(nfTxt) && /@analisi/.test(nfTxt));
+  fs.writeFileSync(nfW, nfTxt + '\nappunto utente\n', 'utf8');
+  R(CASTLE, 'new', 'doppio', 'enterprise v2', 'T01: analisi');
+  check('W4 dossier: ricreare il castello NON clobbera gli appunti', /appunto utente/.test(fs.readFileSync(nfW, 'utf8')));
+
+  // --- Scenario X: protect hook esenta gli appunti, blinda i piani.
+  const PROTECT = path.join(HOOKS, 'danilov-protect.js');
+  r = runStdin(PROTECT, { tool_input: { file_path: nfW } });
+  check('X1 protect: appunti ESENTI (nessun deny)', !/deny/.test(r.out), r.out.slice(0, 150));
+  r = runStdin(PROTECT, { tool_input: { file_path: cfile('doppio') } });
+  check('X2 protect: piano ancora blindato', /deny/.test(r.out), r.out.slice(0, 150));
+
+  // --- Scenario Y: gli appunti non sono piani (resume non li vede come regni).
+  r = R(path.join(HERE, 'resume.js'), '--list', '--json');
+  let jy = null; try { jy = JSON.parse(r.out.trim().split('\n').pop()); } catch {}
+  check('Y1 resume: nessun regno fantasma dai .notes.md', !!jy && jy.open.every(g => !/\.notes$/.test(g.sid)), r.out.slice(0, 200));
+
+  // --- Scenario Z: kanban e mermaid del regno.
+  r = R(CASTLE, 'kanban');
+  check('Z1 kanban: colonne presenti', /## Fatto/.test(r.out) && /## In corso/.test(r.out) && /## Al buio/.test(r.out), r.out.slice(0, 150));
+  check('Z2 kanban: mappa mermaid inclusa', /```mermaid/.test(r.out) && /graph TD/.test(r.out));
+  r = R(CASTLE, 'kanban', '--write');
+  check('Z3 kanban --write: board su file', fs.existsSync(path.join(proj, 'VASCEND_KANBAN.md')), r.out);
+  r = R(CASTLE, 'mermaid');
+  check('Z4 mermaid: grafo con archi after', /graph TD/.test(r.out) && /-\.->\|after\|/.test(r.out), r.out.slice(0, 200));
+
+  // --- Scenario V: trigger /vascend off spegne l'INTERO regno.
+  r = runStdin(path.join(HOOKS, 'danilov-trigger.js'), { session_id: SID, cwd: proj, prompt: '/vascend off' });
+  check('V1 trigger off: blocca il prompt', /disattivata/.test(r.out), r.out.slice(0, 200));
+  check('V2 trigger off: castelli rimossi', !fs.existsSync(cfile('alfa')) && !fs.existsSync(cfile('zeta')));
+  check('V3 trigger off: sub ricorsivi rimossi', !fs.existsSync(sub01));
 } finally {
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 }
