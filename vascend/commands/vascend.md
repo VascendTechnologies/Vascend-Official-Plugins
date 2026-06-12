@@ -153,6 +153,37 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js drop <slug>
   illuminato. La vista completa: `status.js --all --pretty` (o `--all --todo`
   per la todo nativa dell'intero regno).
 
+## Obiettivi business (enterprise): analisi → struttura → esecuzione
+
+Per un obiettivo finale di business ("deploya e trova i clienti", lancio,
+go-to-market) il regno si pianifica in **fasi in DAG**:
+
+1. castello **`analisi`** — brainstorming, ricerca, vincoli, opzioni;
+2. castello **`struttura`** (`--after analisi`) — architettura del lavoro,
+   criteri di done, scelta dei castelli esecutivi;
+3. castelli **esecutivi** (`--after struttura`) — il lavoro vero.
+
+Strumenti dedicati:
+
+- **Appunti per stanza (dossier)**: ogni piano nasce con un gemello
+  `<piano>.notes.md` accanto al file del goal — è ESENTE dal protect hook:
+  scrivi e modifichi liberamente con Write/Edit. Lo scheletro è già
+  STRUTTURATO, niente prosa: un diagramma **mermaid del piano** (nodi=stanze,
+  archi=dep — tienilo aggiornato) e una scheda Danilov per stanza
+  (`@analisi/@decisioni/@esito`). `mark.js` stampa il path dopo ogni
+  marcatura. La colonna `--note` resta per la sintesi a una riga; il dossier
+  è il dettaglio. Piano e Trace restano firmati e intoccabili.
+- **Kanban**: `castle.js kanban` mostra il regno a colonne (fatto / in corso /
+  al buio / fallito) con la provenienza di ogni card; `--write` fissa la board
+  in `VASCEND_KANBAN.md` nel progetto (auto-generata: rigenera, non editare),
+  con in fondo la **mappa mermaid del regno**. Solo il grafo:
+  `castle.js mermaid` (castelli e sub, archi `after`, verde = illuminato).
+- **Checkpoint di contesto pianificati**: marca un task `@compact` nel piano
+  ("T05: ... @compact") — quando lo accendi, mark.js ti ricorda che è il punto
+  ideale per compattare; a piano illuminato l'hint arriva comunque. Il
+  PreCompact hook fotografa il regno in `.vascend-compact.md` prima di ogni
+  compattazione e il SessionStart(compact) lo reinietta dopo.
+
 ## Piani gerarchici (macro/micro, profondità RICORSIVA)
 
 Dentro ogni castello i task sono su livelli: i **macro-task** (i bit del

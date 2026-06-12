@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const { deriveState, hex, taskLabel } = require('./core.js');
-const { goalFile } = require('./session.js');
+const { goalFile, parentOf, writeGoalAtomic, acquireGoalLock, releaseGoalLock } = require('./session.js');
 const { signRow } = require('./crypto.js');
 
 const argv = process.argv.slice(2);
@@ -36,6 +36,10 @@ if (!Number.isInteger(bit) || bit < 0 || bit > 29) {
   process.exit(1);
 }
 const mask = (1 << bit) >>> 0;
+
+// Stesso lock anti-race di mark.js (rilascio su exit, copre gli early-exit).
+const lockDir = acquireGoalLock(file);
+process.on('exit', () => releaseGoalLock(lockDir));
 
 const text = fs.readFileSync(file, 'utf8');
 const { state: pre, lastSig, tampered } = deriveState(text);
@@ -65,7 +69,23 @@ if (lastTableIdx === -1) {
   process.exit(1);
 }
 lines.splice(lastTableIdx + 1, 0, row);
-fs.writeFileSync(file, lines.join('\n'), 'utf8');
+writeGoalAtomic(file, lines.join('\n'));
 
 console.log(`annullato ${taskLabel(bit)} ${hex(mask)} | state ${hex(pre)} -> ${hex(post)} | UNDO`);
+
+// Roll-up inverso: spegnere un micro mentre il bit del PADRE resta acceso
+// crea l'incoerenza "padre acceso, figlio non conforme" (validate --deep la
+// segnala). Avvisa subito e suggerisci l'unmark sul padre.
+try {
+  const pm = String(file).match(/\.sub(\d+)\.md$/i);
+  const parent = parentOf(file);
+  if (pm && parent && fs.existsSync(parent)) {
+    const macroBit = parseInt(pm[1], 10);
+    const pv = deriveState(fs.readFileSync(parent, 'utf8'));
+    if ((pv.state & ((1 << macroBit) >>> 0)) !== 0) {
+      console.log(`warn: il padre ha ${taskLabel(macroBit)} ancora ACCESO ma questo sub non e' piu' conforme.`);
+      console.log(`  riallinea: node ${path.join(__dirname, 'unmark.js').replace(/\\/g, '/')} ${parent.replace(/\\/g, '/')} ${macroBit}`);
+    }
+  }
+} catch {}
 process.exit(0);

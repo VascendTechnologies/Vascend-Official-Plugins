@@ -47,4 +47,42 @@ TOT_BIT: ${TOT}
   return { md, TOT, MASK };
 }
 
-module.exports = { buildPlanMd };
+// Scheletro del DOSSIER appunti (<piano>.notes.md): note STRUTTURATE al posto
+// della prosa — un grafo mermaid del piano (nodi=stanze, archi=dep, da tenere
+// aggiornato man mano) e una scheda Danilov per stanza (@analisi/@decisioni/
+// @esito). Il file e' LIBERO (il protect hook esenta *.notes.md): l'agente lo
+// scrive e riscrive con Write/Edit; questo e' solo il punto di partenza.
+function buildNotesMd(opts) {
+  const tasks = (opts.tasks || []).map(parsePlanTask);
+  const nodes = tasks.map((p, i) => {
+    const label = String(p.desc).replace(/^[tT]\d+:\s*/, '').replace(/["[\]{}()|]/g, ' ').slice(0, 40).trim();
+    return `  T${String(i + 1).padStart(2, '0')}["${label}"]`;
+  });
+  const edges = [];
+  tasks.forEach((p, i) => {
+    if (p.dep === '-') return;
+    for (const d of p.dep.split(',')) {
+      const db = parseInt(d, 10);
+      if (Number.isInteger(db)) edges.push(`  T${String(db + 1).padStart(2, '0')} --> T${String(i + 1).padStart(2, '0')}`);
+    }
+  });
+  const cards = tasks.map((p, i) =>
+    [`## T${String(i + 1).padStart(2, '0')} — ${p.desc}`,
+     '@analisi:   -', '@decisioni: -', '@esito:     -', ''].join('\n'));
+
+  return `# Dossier: ${opts.title}
+Piano: ${opts.planName}
+(appunti LIBERI: Write/Edit ammessi — struttura in notazione Danilov + mermaid,
+non prosa; il verdetto resta nella Trace firmata del piano)
+
+## Mappa del piano (tienila aggiornata)
+
+\`\`\`mermaid
+graph TD
+${[...nodes, ...edges].join('\n')}
+\`\`\`
+
+${cards.join('\n')}`;
+}
+
+module.exports = { buildPlanMd, buildNotesMd };

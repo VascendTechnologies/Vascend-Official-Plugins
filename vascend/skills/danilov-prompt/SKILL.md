@@ -50,7 +50,7 @@ DEFINIZIONI
 @4[quando]:  on=piano_multi-step_con_audit | off=generazione_one-shot
 
 @5[plan]:     cmd=`node ~/.claude/scripts/danilov/plan.js "<titolo>" "T01: ..." "T02: ..." ...`, effetto=crea_piano+MASK_TARGET+header_trace (castello_di_DEFAULT)
-@5[castle]:   cmd=`node ~/.claude/scripts/danilov/castle.js new <slug> "<titolo>" "T01: ..." [--after <slug>]`, effetto=castello_NOMINATO_in_piu' (illimitati); sub=list|map|next|drop; --after=gate_cross-castello(mark_negato_finche'_prerequisito_non_conforme)
+@5[castle]:   cmd=`node ~/.claude/scripts/danilov/castle.js new <slug> "<titolo>" "T01: ..." [--after <slug>]`, effetto=castello_NOMINATO_in_piu' (illimitati); sub=list|map|next|drop|kanban[--write]|mermaid; --after=gate_cross-castello(mark_negato_finche'_prerequisito_non_conforme)
 @5[subplan]:  cmd=`node ~/.claude/scripts/danilov/subplan.js [padre.md] <bit> "<titolo>" "t01: ..." ...`, effetto=sotto-piano_di_QUALSIASI_piano(master|castello|sub) -> profondita'_RICORSIVA_illimitata; roll-up=il_bit_del_padre_si_accende_solo_a_figlio_conforme(mark.js_lo_garantisce_livello_per_livello)
 @5[mark]:     cmd=`node ~/.claude/scripts/danilov/mark.js [file.md] <bit> OK|FAIL`, effetto=appende_riga_FIRMATA+accende_bit, regola=1chiamata=1bit, idempotente=exit3_se_gia'_acceso
 @5[validate]: cmd=`node ~/.claude/scripts/danilov/validate.js [--deep|--kingdom]`, calcola=validate(state)==(state==MASK_TARGET)_dalla_Trace_firmata; --deep=figli_ricorsivi+coerenza_rollup; --kingdom=TUTTI_i_castelli(TRUE_sse_ogni_castello_illuminato), segnala=missing(task_da_rifare)+MANOMISSIONE_se_firma_invalida
@@ -100,6 +100,10 @@ DEFINIZIONI
 @14[file]:    naming=implicito: <sid>.md | <sid>.castle-<slug>.md | <base>.sub<bit>.md(ricorsivo)
 @14[ordine]:  --after=<slug> mette_i_castelli_in_DAG (fondamenta->torre); kingdom_next=prossima_stanza_al_buio_del_regno_scesa_in_profondita'
 @14[chiuso]:  validate(regno)=TRUE sse OGNI_castello_illuminato; lo_Stop_hook_blocca_sul_REGNO, non_sul_singolo_castello
+@14[dossier]: appunti_per_stanza=<piano>.notes.md (ESENTE_dal_protect: Write/Edit_liberi); scheletro_auto=mermaid_del_piano+scheda_Danilov_per_stanza(@analisi/@decisioni/@esito); note_STRUTTURATE_non_prosa; --note_di_mark=sintesi_1riga, dossier=dettaglio
+@14[kanban]:  castle_kanban[--write]=board(fatto/in_corso/al_buio/fallito)+mappa_mermaid -> VASCEND_KANBAN.md; castle_mermaid=grafo_regno(archi_after+padre->sub, verde=illuminato)
+@14[compact]: task_marcato_@compact=checkpoint_pianificato(mark_lo_ricorda); PreCompact_hook=foto_del_regno_in_.vascend-compact.md_prima_della_compattazione; SessionStart(compact)_reinietta_il_regno_dopo
+@14[enterprise]: obiettivo_business -> regno_in_fasi: analisi -> struttura(--after) -> esecuzione(--after); dossier_per_le_stanze_pesanti + kanban_per_il_tracking
 
 RELAZIONI
 @R1:  @1[indice] → @1[def]      [ i tipi tipizzano le istanze ]

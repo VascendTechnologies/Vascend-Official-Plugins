@@ -37,8 +37,10 @@ const curSid = String(currentSessionId() || 'no-session');
 
 // Classifica un nome file del goalDir. Radici: master <sid>.md o castello
 // <sid>.castle-<slug>.md. I sub hanno suffissi .sub<N> (ricorsivi).
+// Gli APPUNTI (*.notes.md) non sono piani: esclusi (resterebbero classificati
+// come regni fantasma).
 function classify(n) {
-  if (!/\.md$/i.test(n)) return null;
+  if (!/\.md$/i.test(n) || /\.notes\.md$/i.test(n)) return null;
   const base = n.replace(/\.md$/i, '');
   const subM = base.match(/^(.*?)((?:\.sub\d+)+)$/);
   const rootBase = subM ? subM[1] : base;
@@ -197,6 +199,12 @@ try {
     const newName = curSid + f.name.slice(chosen.sid.length);
     fs.copyFileSync(f.file, path.join(dir, newName));
     copied += 1;
+    // gli APPUNTI (<base>.notes.md) seguono il loro piano
+    const nf = f.file.replace(/\.md$/i, '.notes.md');
+    if (fs.existsSync(nf)) {
+      fs.copyFileSync(nf, path.join(dir, newName.replace(/\.md$/i, '.notes.md')));
+      copied += 1;
+    }
   }
   const d = describe(chosen);
   console.log(`riattaccato: "${d.title}"  [${d.popcount}]  (${copied} file: ${d.castles} castelli${d.subs ? ` + ${d.subs} sotto-piani` : ''})`);
