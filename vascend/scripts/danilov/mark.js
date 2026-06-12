@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { deriveState, computeVerdict, hex, taskLabel } = require('./core.js');
-const { goalFile, subGoalFile } = require('./session.js');
+const { goalFile, childGoalFile } = require('./session.js');
 const { signRow } = require('./crypto.js');
 
 // Flag: --dry (anteprima), --force (bypassa il gate dipendenze), --note "<t>"
@@ -112,16 +112,45 @@ const post = esito === 'OK' ? (pre | mask) >>> 0 : pre;
 const deps = esito === 'OK' ? planDeps(bit) : [];
 const depMissing = deps.filter(d => (pre & ((1 << d) >>> 0)) === 0);
 
-// Stato del roll-up (se master + OK + esiste un sotto-piano per questo bit).
-const isMaster = path.resolve(file) === path.resolve(goalFile(process.cwd()));
+// Stato del roll-up: vale per QUALSIASI piano (master, castello o sub) che
+// abbia un figlio per questo bit (<base>.sub<bit>.md). Ricorsivo per
+// induzione: il figlio a sua volta ha potuto accendersi solo coi SUOI figli
+// conformi -> la luce sale dal livello piu' profondo.
 let rollup = null; // {conforme, popcount, missing}
-if (esito === 'OK' && isMaster) {
-  const sub = subGoalFile(process.cwd(), undefined, bit);
+if (esito === 'OK') {
+  const sub = childGoalFile(file, bit);
   if (fs.existsSync(sub)) {
     const sv = computeVerdict(fs.readFileSync(sub, 'utf8'));
     rollup = { conforme: sv.conforme, popcount: sv.popcount,
       missing: (sv.missingTasks || []).map(t => `${t.task} (${hex(t.mask)})`) };
   }
+}
+
+// Gate cross-castello (After): se la RADICE di questo piano e' un castello con
+// "After: <slug>", nessun OK finche' il castello prerequisito non e' conforme
+// (salvo --force). La radice si ricava togliendo i suffissi .sub<N>.
+function rootOf(f) {
+  let r = path.resolve(f);
+  for (;;) { const m = r.match(/^(.*)\.sub\d+\.md$/i); if (!m) return r; r = m[1] + '.md'; }
+}
+let afterGate = null; // {slug, conforme, popcount, missing:bool}
+if (esito === 'OK') {
+  try {
+    const root = rootOf(file);
+    if (/\.castle-[a-z0-9-]+\.md$/i.test(root)) {
+      const rootText = path.resolve(root) === path.resolve(file) ? text : fs.readFileSync(root, 'utf8');
+      const slug = (rootText.match(/^After:\s*([a-z0-9-]+)\s*$/m) || [])[1];
+      if (slug) {
+        const prereq = root.replace(/\.castle-[a-z0-9-]+\.md$/i, `.castle-${slug}.md`);
+        if (fs.existsSync(prereq)) {
+          const pv = computeVerdict(fs.readFileSync(prereq, 'utf8'));
+          afterGate = { slug, conforme: pv.conforme, popcount: pv.popcount, missing: false };
+        } else {
+          afterGate = { slug, conforme: true, popcount: '?', missing: true }; // demolito -> non gata
+        }
+      }
+    }
+  } catch {}
 }
 
 // --- ANTEPRIMA (--dry): mostra tutto, NON scrive ----------------------------
@@ -134,6 +163,7 @@ if (dry) {
   if (deps.length) out.push(`dep: ${deps.map(d => taskLabel(d)).join(', ')}${depMissing.length ? ` -> AL BUIO: ${depMissing.map(d => taskLabel(d)).join(', ')} (mark negato senza --force)` : ' (tutte accese)'}`);
   if (noteClean) out.push(`nota: ${noteClean}`);
   if (check != null) out.push(`gate: "${check}" (verra' eseguito al mark reale; bit acceso solo se exit 0)`);
+  if (afterGate && !afterGate.missing) out.push(`after: castello "${afterGate.slug}" ${afterGate.conforme ? 'conforme (gate aperto)' : `NON conforme (${afterGate.popcount}) -> mark negato senza --force`}`);
   if (rollup) out.push(`roll-up: ${rollup.conforme ? `OK (sub ${rollup.popcount})` : `NEGATO (sub ${rollup.popcount}${rollup.missing.length ? ', al buio: ' + rollup.missing.join(', ') : ''})`}`);
   out.push(`conferma: node ${path.join(__dirname, 'mark.js').replace(/\\/g, '/')} ${bit} ${esito}`);
   process.stdout.write(out.join('\n') + '\n');
@@ -147,6 +177,14 @@ if (already) {
   console.log(`gia' marcato ${taskLabel(bit)} ${hex(mask)} | state ${hex(pre)} (nessuna modifica)`);
   process.exit(3);
 }
+// Gate cross-castello: il castello (o un suo sub) non accende stanze finche'
+// il castello prerequisito (After) non e' conforme. --force per scavalcare.
+if (afterGate && !afterGate.missing && !afterGate.conforme && !force) {
+  console.error(`gate After negato: il castello prerequisito "${afterGate.slug}" non e' conforme (${afterGate.popcount}).`);
+  console.error('  illuminalo prima, oppure forza con --force.');
+  process.exit(1);
+}
+
 // Roll-up gerarchico: un macro-bit con sotto-piano si accende solo se il sub
 // e' conforme. Senza sotto-piano e' atomico (invariato).
 if (rollup && !rollup.conforme) {

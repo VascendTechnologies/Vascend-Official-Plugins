@@ -20,12 +20,13 @@ DEFINIZIONI
 @3[def]:     istanze @N[id]:prop=val con le proprieta' che contano
 @3[rel]:     legami @R:A→B (orientato) / A↔B (simmetrico)
 @3[chiusura]: chiudi sempre con OUTPUT: (cosa deve venirne fuori)
-@4[atomico]: ogni task verificabile (si capisce quando e' "fatto"), ordinato per dipendenza, niente contenitori vaghi, <=30 bit
+@4[atomico]: ogni task verificabile (si capisce quando e' "fatto"), ordinato per dipendenza, niente contenitori vaghi, <=30 bit PER PIANO
 @4[master]:  lista `T01: <azione concreta>`, `T02: ...` per il piano principale
-@4[sub]:     lista `t01: <micro>`, `t02: ...` per il sotto-piano di un macro-task
+@4[sub]:     lista `t01: <micro>`, `t02: ...` per il sotto-piano di un macro-task; ricorsivo (anche un micro puo' avere il suo sub)
 @4[gerarchia]: se l'obiettivo e' grande, indica QUALI macro-task meritano un sotto-piano
+@4[castelli]: se l'obiettivo ha PIU' workstream indipendenti, proponi N CASTELLI nominati (slug + titolo + lista T0k ciascuno) e le dipendenze tra castelli (`--after <slug>`: fondamenta prima della torre); la scala e' composizione, non un piano piu' lungo
 @5[ordine]:  PRIMA il blocco Danilov (INDICE/DEFINIZIONI/RELAZIONI + OUTPUT), POI la lista T0k/t0k nuda
-@5[uso]:     la lista alimenta `plan.js "<titolo>" "T01: ..."`  oppure  `subplan.js <macroBit> "<titolo>" "t01: ..."`
+@5[uso]:     la lista alimenta `plan.js "<titolo>" "T01: ..."` | `castle.js new <slug> "<titolo>" "T01: ..." [--after <slug>]` | `subplan.js [padre.md] <bit> "<titolo>" "t01: ..."`
 
 RELAZIONI
 @R1: @2[brief]  → @3 → @4          [ dal brief al piano alla lista task ]

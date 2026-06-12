@@ -57,10 +57,10 @@ TOT_BIT: ${TOT}
   return { TOT, MASK };
 }
 
-// Esegue mark.js / validate.js raccogliendo {code, out}.
-function run(script, args) {
+// Esegue mark.js / validate.js raccogliendo {code, out}. opts: {env, cwd}.
+function run(script, args, opts) {
   try {
-    const out = execFileSync('node', [script, ...args], { encoding: 'utf8' });
+    const out = execFileSync('node', [script, ...args], { encoding: 'utf8', ...(opts || {}) });
     return { code: 0, out };
   } catch (e) {
     return { code: e.status == null ? -1 : e.status, out: (e.stdout || '') + (e.stderr || '') };
@@ -167,6 +167,88 @@ try {
   check(`H1 tetto ${TOP}bit: state == target`, (vH.state >>> 0) === maskH, core.hex(vH.state) + ' vs ' + core.hex(maskH));
   check(`H2 tetto ${TOP}bit: validate TRUE`, vH.validate === true);
   check(`H3 tetto ${TOP}bit: popcount ${TOP}/${TOP}`, vH.popcount === `${TOP}/${TOP}`, vH.popcount);
+
+  // === REGNO MULTI-CASTELLO: sessione ISOLATA (config+sid+cwd in tmp) =========
+  // Tutti gli script girano come child con env override: chiave HMAC, goalDir e
+  // session-id vivono nella sandbox, mai nella ~/.claude reale.
+  const CASTLE = path.join(HERE, 'castle.js');
+  const SUBPLAN = path.join(HERE, 'subplan.js');
+  const PLAN = path.join(HERE, 'plan.js');
+  const cfg = path.join(tmp, 'cfg');
+  const proj = path.join(tmp, 'proj');
+  fs.mkdirSync(proj, { recursive: true });
+  const SID = 'selftest-sid';
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: cfg, CLAUDE_CODE_SESSION_ID: SID };
+  const opts = { env, cwd: proj };
+  const gdir = path.join(cfg, 'projects', proj.replace(/[^a-zA-Z0-9]/g, '-'), 'DanilovGoal');
+  const cfile = (slug) => path.join(gdir, `${SID}.castle-${slug}.md`);
+  const R = (script, ...args) => run(script, args.map(String), opts);
+
+  // --- Scenario I: due castelli nominati -> regno aperto, poi illuminato.
+  let r = R(CASTLE, 'new', 'alfa', 'castello alfa', 'T01: uno', 'T02: due');
+  check('I1 castle new alfa: exit 0', r.code === 0, r.out);
+  check('I2 castle alfa: file creato', fs.existsSync(cfile('alfa')));
+  R(CASTLE, 'new', 'beta', 'castello beta', 'T01: uno');
+  r = R(CASTLE, 'list', '--json');
+  let jl = null; try { jl = JSON.parse(r.out.trim().split('\n').pop()); } catch {}
+  check('I3 list: 2 castelli, regno FALSE', !!jl && jl.castles.length === 2 && jl.conforme === false && r.code === 1, r.out);
+  r = R(VALIDATE, '--kingdom');
+  check('I4 validate --kingdom: exit 1 a regno aperto', r.code === 1, String(r.code));
+  R(MARK, cfile('alfa'), 0, 'OK'); R(MARK, cfile('alfa'), 1, 'OK'); R(MARK, cfile('beta'), 0, 'OK');
+  r = R(VALIDATE, '--kingdom');
+  check('I5 validate --kingdom: exit 0 a regno illuminato', r.code === 0, r.out);
+  check('I6 --kingdom: Result(regno) TRUE', /validate\(regno\) = TRUE/.test(r.out));
+
+  // --- Scenario J: gerarchia RICORSIVA (castello -> sub -> sub-sub) + roll-up.
+  R(CASTLE, 'new', 'gamma', 'castello gamma', 'T01: macro');
+  r = R(SUBPLAN, cfile('gamma'), 0, 'sub di gamma', 't01: micro-a', 't02: micro-b');
+  check('J1 subplan su castello: exit 0', r.code === 0, r.out);
+  const sub0 = cfile('gamma').replace(/\.md$/, '.sub0.md');
+  check('J2 sub file creato', fs.existsSync(sub0));
+  r = R(SUBPLAN, sub0, 1, 'sub-sub', 't01: nano');
+  check('J3 subplan su sub (livello 3): exit 0', r.code === 0, r.out);
+  const sub01 = sub0.replace(/\.md$/, '.sub1.md');
+  r = R(MARK, cfile('gamma'), 0, 'OK');
+  check('J4 roll-up castello negato (sub aperto)', r.code === 1 && /roll-up negato/.test(r.out), r.out);
+  r = R(MARK, sub0, 1, 'OK');
+  check('J5 roll-up sub negato (sub-sub aperto)', r.code === 1 && /roll-up negato/.test(r.out), r.out);
+  R(MARK, sub01, 0, 'OK');
+  r = R(MARK, sub0, 1, 'OK');
+  check('J6 micro col sub-sub conforme: acceso', r.code === 0, r.out);
+  R(MARK, sub0, 0, 'OK');
+  r = R(MARK, cfile('gamma'), 0, 'OK');
+  check('J7 macro col sub conforme: acceso (roll-up a catena)', r.code === 0, r.out);
+  r = R(VALIDATE, cfile('gamma'), '--deep');
+  check('J8 validate --deep ricorsivo: exit 0', r.code === 0, r.out);
+
+  // --- Scenario L: gate cross-castello (--after).
+  R(CASTLE, 'new', 'delta', 'fondamenta', 'T01: base');
+  r = R(CASTLE, 'new', 'epsilon', 'torre', 'T01: cima', '--after', 'delta');
+  check('L1 castle --after: exit 0', r.code === 0, r.out);
+  r = R(MARK, cfile('epsilon'), 0, 'OK');
+  check('L2 after gate: mark negato finche\' delta e\' aperto', r.code === 1 && /gate After negato/.test(r.out), r.out);
+  R(MARK, cfile('delta'), 0, 'OK');
+  r = R(MARK, cfile('epsilon'), 0, 'OK');
+  check('L3 after gate: aperto a prerequisito conforme', r.code === 0, r.out);
+
+  // --- Scenario M: master e castelli coesistono; plan.js non tocca i castelli.
+  R(PLAN, 'master di sessione', 'T01: uno');
+  check('M1 plan.js: master creato accanto ai castelli', fs.existsSync(path.join(gdir, `${SID}.md`)));
+  check('M2 plan.js: castelli intatti', fs.existsSync(cfile('alfa')) && fs.existsSync(cfile('gamma')));
+  r = R(SUBPLAN, 0, 'sub legacy del master', 't01: micro');
+  check('M3 subplan legacy (solo bit): exit 0', r.code === 0, r.out);
+  check('M4 sub del master creato', fs.existsSync(path.join(gdir, `${SID}.sub0.md`)));
+  R(PLAN, 'master rigenerato', 'T01: uno');
+  check('M5 plan.js rigenerato: sub del master droppato', !fs.existsSync(path.join(gdir, `${SID}.sub0.md`)));
+  check('M6 plan.js rigenerato: castelli ancora intatti', fs.existsSync(cfile('beta')) && fs.existsSync(sub01));
+
+  // --- Scenario N: castle next scende alla stanza giusta in profondita'.
+  R(CASTLE, 'new', 'zeta', 'profondo', 'T01: macro');
+  R(SUBPLAN, cfile('zeta'), 0, 'sub di zeta', 't01: micro');
+  r = R(CASTLE, 'next', '--json');
+  let jn = null; try { jn = JSON.parse(r.out.trim().split('\n').pop()); } catch {}
+  check('N1 next: punta dentro il regno', !!jn && typeof jn.file === 'string', r.out);
+  check('N2 next: la stanza e\' nel sub piu\' profondo aperto o nel master', !!jn && /\.md$/.test(jn.file));
 } finally {
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 }

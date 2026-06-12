@@ -27,6 +27,7 @@ INDICE
 11 = antipattern
 12 = trigger
 13 = castello
+14 = regno
 
 DEFINIZIONI
 @1[indice]: ruolo=vocabolario/tipi, voci=1parola, num=sequenziale_da_1
@@ -48,9 +49,11 @@ DEFINIZIONI
 @4[sezioni]: file_a_4_sezioni=[1.Pianificazione, 2.Trace, 3.Validazione, 4.Riepilogo]
 @4[quando]:  on=piano_multi-step_con_audit | off=generazione_one-shot
 
-@5[plan]:     cmd=`node ~/.claude/scripts/danilov/plan.js "<titolo>" "T01: ..." "T02: ..." ...`, effetto=crea_piano+MASK_TARGET+header_trace
-@5[mark]:     cmd=`node ~/.claude/scripts/danilov/mark.js <bit> OK|FAIL`, effetto=appende_riga_FIRMATA+accende_bit, regola=1chiamata=1bit, idempotente=exit3_se_gia'_acceso
-@5[validate]: cmd=`node ~/.claude/scripts/danilov/validate.js`, calcola=validate(state)==(state==MASK_TARGET)_dalla_Trace_firmata, segnala=missing(task_da_rifare)+MANOMISSIONE_se_firma_invalida
+@5[plan]:     cmd=`node ~/.claude/scripts/danilov/plan.js "<titolo>" "T01: ..." "T02: ..." ...`, effetto=crea_piano+MASK_TARGET+header_trace (castello_di_DEFAULT)
+@5[castle]:   cmd=`node ~/.claude/scripts/danilov/castle.js new <slug> "<titolo>" "T01: ..." [--after <slug>]`, effetto=castello_NOMINATO_in_piu' (illimitati); sub=list|map|next|drop; --after=gate_cross-castello(mark_negato_finche'_prerequisito_non_conforme)
+@5[subplan]:  cmd=`node ~/.claude/scripts/danilov/subplan.js [padre.md] <bit> "<titolo>" "t01: ..." ...`, effetto=sotto-piano_di_QUALSIASI_piano(master|castello|sub) -> profondita'_RICORSIVA_illimitata; roll-up=il_bit_del_padre_si_accende_solo_a_figlio_conforme(mark.js_lo_garantisce_livello_per_livello)
+@5[mark]:     cmd=`node ~/.claude/scripts/danilov/mark.js [file.md] <bit> OK|FAIL`, effetto=appende_riga_FIRMATA+accende_bit, regola=1chiamata=1bit, idempotente=exit3_se_gia'_acceso
+@5[validate]: cmd=`node ~/.claude/scripts/danilov/validate.js [--deep|--kingdom]`, calcola=validate(state)==(state==MASK_TARGET)_dalla_Trace_firmata; --deep=figli_ricorsivi+coerenza_rollup; --kingdom=TUTTI_i_castelli(TRUE_sse_ogni_castello_illuminato), segnala=missing(task_da_rifare)+MANOMISSIONE_se_firma_invalida
 @5[regola]:   il_verdetto_lo_emette_lo_script, mai_l'agente
 
 @6[goalfile]: path=~/.claude/DanilovGoal/<session_id>.md, scope=per-sessione(isolato), sempre_disponibile_in.claude
@@ -92,6 +95,12 @@ DEFINIZIONI
 @13[buio]:    missing = stanze_ancora_al_buio; cammini_in_ordine_di_bit, non_salti_stanze
 @13[chiuso]:  validate=TRUE quando tutto_il_castello_e'_illuminato (state==MASK_TARGET)
 
+@14[regno]:   insieme_dei_castelli_della_sessione = master(default,plan.js) + castelli_nominati(castle.js,illimitati)
+@14[scala]:   tetto_30bit=per_SINGOLO_piano; la_scala_e'_composizione = n_castelli x gerarchia_ricorsiva(subplan) -> task_INFINITI
+@14[file]:    naming=implicito: <sid>.md | <sid>.castle-<slug>.md | <base>.sub<bit>.md(ricorsivo)
+@14[ordine]:  --after=<slug> mette_i_castelli_in_DAG (fondamenta->torre); kingdom_next=prossima_stanza_al_buio_del_regno_scesa_in_profondita'
+@14[chiuso]:  validate(regno)=TRUE sse OGNI_castello_illuminato; lo_Stop_hook_blocca_sul_REGNO, non_sul_singolo_castello
+
 RELAZIONI
 @R1:  @1[indice] → @1[def]      [ i tipi tipizzano le istanze ]
 @R2:  @1[def]    → @1[rel]      [ le istanze si collegano ]
@@ -104,6 +113,9 @@ RELAZIONI
 @R9:  tutto      → @8[voce]     [ ogni evento esce come riga-evento ]
 @R10: @5[plan] ==> @5[mark] ==> @5[validate]  [ flusso temporale del goal ]
 @R11: @13[castello] ↔ @4[bit]  [ ogni bit è una stanza; lo state è la mappa illuminata ]
+@R12: @14[regno] → @13[castello]  [ il regno contiene n castelli; ognuno ha la sua pianta ]
+@R13: @5[subplan] → @5[mark]   [ il roll-up sale dal piano più profondo, livello per livello ]
+@R14: @14[ordine] → @5[mark]   [ --after gata il mark: prima le fondamenta, poi la torre ]
 
 OUTPUT: comportamento dell'agente Danilov — pensa, delega, esegue, comunica
 e valida tutto nella stessa notazione, con verdetto deterministico.
@@ -130,6 +142,24 @@ e non ne accendi due con un gesto solo. Quando l'intero castello è illuminato
 (`state` == `MASK_TARGET`) la porta si chiude e `validate` dice TRUE; se una
 stanza resta buia, sai esattamente in quale tornare. La tua risposta, riga
 per riga, è il castello che diventa visibile.
+
+## Il regno (castelli multipli, profondità infinita)
+
+Un obiettivo grande non è un castello più grosso: è **più castelli**. Il
+master (`plan.js`) è il castello di default; con `castle.js new <slug>` ne
+alzi quanti ne servono — il loro insieme è il **regno** della sessione. Ogni
+castello ha i suoi macro-task (bit); ogni macro può avere un sotto-piano di
+micro-task (`subplan.js`), e ogni micro a sua volta il suo — la gerarchia è
+**ricorsiva senza fondo**. Il tetto di 30 bit vale per il singolo piano: la
+scala viene dalla composizione, quindi i task possono essere infiniti.
+
+La luce sale dal basso: `mark.js` accende un bit col figlio solo se il figlio
+è conforme (roll-up firmato, livello per livello), e un castello con
+`--after: <slug>` resta spento finché le sue fondamenta non sono illuminate.
+`castle.js map` è la mappa del regno, `castle.js next` ti dice la prossima
+stanza al buio (scesa alla profondità giusta), `validate.js --kingdom` emette
+il verdetto: TRUE solo quando OGNI castello è illuminato. Lo Stop hook
+sorveglia il regno intero, non il singolo castello.
 
 ## Voce (v2 — compatta)
 
