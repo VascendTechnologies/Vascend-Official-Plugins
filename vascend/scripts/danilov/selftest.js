@@ -180,7 +180,12 @@ try {
   const SID = 'selftest-sid';
   const env = { ...process.env, CLAUDE_CONFIG_DIR: cfg, CLAUDE_CODE_SESSION_ID: SID };
   const opts = { env, cwd: proj };
-  const gdir = path.join(cfg, 'projects', proj.replace(/[^a-zA-Z0-9]/g, '-'), 'DanilovGoal');
+  // gdir dalla STESSA risoluzione degli script (goalDir canonicalizza il cwd:
+  // realpath + lookup case-insensitive): calcolarlo a mano divergerebbe.
+  const sessionJs = path.join(HERE, 'session.js').replace(/\\/g, '/');
+  const gdir = execFileSync('node',
+    ['-e', `console.log(require(${JSON.stringify(sessionJs)}).goalDir(process.cwd()))`],
+    { ...opts, encoding: 'utf8' }).trim();
   const cfile = (slug) => path.join(gdir, `${SID}.castle-${slug}.md`);
   const R = (script, ...args) => run(script, args.map(String), opts);
 
@@ -328,6 +333,41 @@ try {
   check('Z3 kanban --write: board su file', fs.existsSync(path.join(proj, 'VASCEND_KANBAN.md')), r.out);
   r = R(CASTLE, 'mermaid');
   check('Z4 mermaid: grafo con archi after', /graph TD/.test(r.out) && /-\.->\|after\|/.test(r.out), r.out.slice(0, 200));
+
+  // --- Scenario AB: cwd canonico — case diverso, stesso regno (no fantasmi).
+  r = run(CASTLE, ['list', '--json'], { env, cwd: proj.toLowerCase() });
+  let jab = null; try { jab = JSON.parse(r.out.trim().split('\n').pop()); } catch {}
+  check('AB1 goalDir canonico: cwd lowercase trova lo stesso regno', !!jab && jab.ok === true && jab.castles.length > 0, r.out.slice(0, 150));
+
+  // --- Scenario AD: stats — durate per stanza dalla Trace.
+  r = R(CASTLE, 'stats');
+  check('AD1 stats: header regno con popcount', /^regno \d+\/\d+/.test(r.out), r.out.slice(0, 80));
+  check('AD2 stats: righe per stanza con durata', /T01\s+\d+(s|min)/.test(r.out), r.out.slice(0, 300));
+  r = R(CASTLE, 'stats', '--json');
+  let jad = null; try { jad = JSON.parse(r.out.trim().split('\n').pop()); } catch {}
+  check('AD3 stats --json: piani con rooms', !!jad && jad.ok && Array.isArray(jad.plans) && jad.plans.some(p => p.rooms.length), r.out.slice(0, 150));
+
+  // --- Scenario AE: validate --kingdom --json per automazioni.
+  r = R(VALIDATE, '--kingdom', '--json');
+  let jae = null; try { jae = JSON.parse(r.out.trim().split('\n').pop()); } catch {}
+  check('AE1 --kingdom --json: castelli + verdetto boolean', !!jae && jae.ok && Array.isArray(jae.castles) && typeof jae.validate === 'boolean', r.out.slice(0, 150));
+
+  // --- Scenario AC: retention — i regni CHIUSI vecchi se ne vanno, gli aperti no.
+  const PRUNE = path.join(HERE, 'prune.js');
+  const envOld = { ...env, CLAUDE_CODE_SESSION_ID: 'old-closed-sid' };
+  run(CASTLE, ['new', 'vecchio', 'regno chiuso', 'T01: unico'], { env: envOld, cwd: proj });
+  run(MARK, [path.join(gdir, 'old-closed-sid.castle-vecchio.md'), '0', 'OK'], { env: envOld, cwd: proj });
+  const envOpen = { ...env, CLAUDE_CODE_SESSION_ID: 'old-open-sid' };
+  run(CASTLE, ['new', 'aperto', 'regno aperto', 'T01: mai fatto'], { env: envOpen, cwd: proj });
+  const backdate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  for (const n of fs.readdirSync(gdir)) {
+    if (n.startsWith('old-')) fs.utimesSync(path.join(gdir, n), backdate, backdate);
+  }
+  r = R(PRUNE, '--days', '14', '--json');
+  let jac = null; try { jac = JSON.parse(r.out.trim().split('\n').pop()); } catch {}
+  check('AC1 prune: regno chiuso vecchio rimosso', !!jac && jac.removedKingdoms >= 1 && !fs.existsSync(path.join(gdir, 'old-closed-sid.castle-vecchio.md')), r.out.slice(0, 150));
+  check('AC2 prune: regno APERTO vecchio intatto', fs.existsSync(path.join(gdir, 'old-open-sid.castle-aperto.md')));
+  check('AC3 prune: sessione corrente intatta', fs.existsSync(cfile('doppio')));
 
   // --- Scenario V: trigger /vascend off spegne l'INTERO regno.
   r = runStdin(path.join(HOOKS, 'danilov-trigger.js'), { session_id: SID, cwd: proj, prompt: '/vascend off' });

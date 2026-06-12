@@ -36,13 +36,35 @@ function encodeCwd(cwd) {
   return String(cwd || process.cwd()).replace(/[^a-zA-Z0-9]/g, '-');
 }
 
+// Forma CANONICA del cwd: su Windows lo stesso dir arriva in piu' vesti
+// (C:\Users vs c:\users, short-name 8.3 L2709~1.DAN vs nome lungo) e ogni
+// veste produrrebbe una chiave encode diversa -> goal FANTASMA. realpath
+// normalizza case e short-name al nome reale del filesystem.
+function canonicalCwd(cwd) {
+  const raw = String(cwd || process.cwd());
+  try { return (fs.realpathSync.native || fs.realpathSync)(raw); } catch { return raw; }
+}
+
 // Casa del goal: DENTRO lo storage di sessione del progetto
 // (~/.claude/projects/<cwd-encoded>/DanilovGoal/), co-locato con i transcript
 // che il resume richiama. Vantaggi: isolato per progetto, stabile per i
 // subagenti (stesso cwd+env), legato alla sessione persistente, e FUORI da
 // ~/.claude/DanilovGoal (niente collisioni con altre chat o test).
+// Risoluzione retrocompatibile: se la chiave esatta non esiste ma c'e' una
+// dir di progetto che differisce SOLO per case (creata da Claude Code o da
+// una veste precedente del cwd), si usa quella — nessuna migrazione di file.
 function goalDir(cwd) {
-  return path.join(CLAUDE_DIR, 'projects', encodeCwd(cwd), 'DanilovGoal');
+  const projects = path.join(CLAUDE_DIR, 'projects');
+  const key = encodeCwd(canonicalCwd(cwd));
+  const exact = path.join(projects, key);
+  if (!fs.existsSync(exact)) {
+    try {
+      const lc = key.toLowerCase();
+      const hit = fs.readdirSync(projects).find(n => n.toLowerCase() === lc);
+      if (hit) return path.join(projects, hit, 'DanilovGoal');
+    } catch {}
+  }
+  return path.join(exact, 'DanilovGoal');
 }
 function goalFile(cwd, sessionId) {
   const sid = currentSessionId(sessionId);
@@ -208,5 +230,5 @@ module.exports = {
   childGoalFile, listChildGoals, listDescendants, listSessionPlans, parentOf,
   notesFile, isNotesName,
   writeGoalAtomic, acquireGoalLock, releaseGoalLock,
-  encodeCwd, currentSessionId, CLAUDE_DIR,
+  encodeCwd, canonicalCwd, currentSessionId, CLAUDE_DIR,
 };

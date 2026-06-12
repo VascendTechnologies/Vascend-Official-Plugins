@@ -197,7 +197,17 @@ try {
   for (const f of chosen.files) {
     // rinomina il prefisso di sessione: <oldSid>... -> <curSid>...
     const newName = curSid + f.name.slice(chosen.sid.length);
-    fs.copyFileSync(f.file, path.join(dir, newName));
+    const dest = path.join(dir, newName);
+    fs.copyFileSync(f.file, dest);
+    // l'header informativo "Master: <file>" dei sub punta ancora al vecchio
+    // sid: riallinealo al nuovo (non e' firmato, la Trace non si tocca).
+    if (f.kind === 'sub') {
+      try {
+        const txt = fs.readFileSync(dest, 'utf8');
+        const fixed = txt.replace(/^(Master:\s*)(.+)$/m, (_, p, name) => p + curSid + String(name).trim().slice(chosen.sid.length));
+        if (fixed !== txt) fs.writeFileSync(dest, fixed, 'utf8');
+      } catch {}
+    }
     copied += 1;
     // gli APPUNTI (<base>.notes.md) seguono il loro piano
     const nf = f.file.replace(/\.md$/i, '.notes.md');

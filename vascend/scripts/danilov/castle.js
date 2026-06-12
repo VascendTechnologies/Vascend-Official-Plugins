@@ -28,7 +28,7 @@ const {
   goalDir, castleSlug, castleFile, listCastles, listDescendants,
   notesFile, writeGoalAtomic, CLAUDE_DIR, currentSessionId,
 } = require('./session.js');
-const { kingdomVerdict, nextRoom, rootLabel, afterOf, planTasksOf } = require('./kingdom.js');
+const { kingdomVerdict, nextRoom, rootLabel, afterOf, planTasksOf, traceTimes } = require('./kingdom.js');
 
 const raw = process.argv.slice(2);
 const asJson = raw.includes('--json');
@@ -277,4 +277,47 @@ if (cmd === 'kanban') {
   process.exit(k.conforme ? 0 : 1);
 }
 
-die(`comando sconosciuto: ${cmd} (new|list|map|next|drop|kanban|mermaid)`);
+// --- stats: durate per stanza dalla cronologia della Trace -------------------
+// La Trace e' sequenziale: durata di una stanza ~= delta tra il suo mark OK e
+// l'evento precedente (o il Creato per la prima). Diagnostica di performance
+// (stanze lente = candidati a sub-piani o @compact), non verdetto.
+if (cmd === 'stats') {
+  const fmtMs = (ms) => {
+    if (ms == null || !Number.isFinite(ms) || ms < 0) return '?';
+    const m = Math.round(ms / 60000);
+    return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m` : (m >= 1 ? `${m}min` : `${Math.max(1, Math.round(ms / 1000))}s`);
+  };
+  const out = [];
+  const jsonOut = [];
+  let kStart = null, kEnd = null;
+  for (const p of k.plans) {
+    const { created, events } = traceTimes(p.file);
+    if (!events.length && created == null) continue;
+    const tasks = new Map(planTasksOf(p.file).map(t => [t.bit, t.desc]));
+    let prev = created != null ? created : (events[0] ? events[0].ts : null);
+    const rooms = [];
+    for (const e of events) {
+      const dur = prev != null ? e.ts - prev : null;
+      if (e.esito === 'OK') rooms.push({ bit: e.bit, task: taskLabel(e.bit), desc: tasks.get(e.bit) || '', ms: dur });
+      prev = e.ts;
+    }
+    const first = created != null ? created : (events[0] ? events[0].ts : null);
+    const last = events.length ? events[events.length - 1].ts : null;
+    if (first != null) kStart = kStart == null ? first : Math.min(kStart, first);
+    if (last != null) kEnd = kEnd == null ? last : Math.max(kEnd, last);
+    const where = p.depth === 0 ? rootLabel(p) : `${p.slug || 'master'} › sub T${String(p.bit + 1).padStart(2, '0')}`;
+    const slowest = rooms.reduce((a, r) => (r.ms != null && (a == null || r.ms > a.ms) ? r : a), null);
+    jsonOut.push({ plan: where, title: p.title, popcount: p.v.popcount, totalMs: first != null && last != null ? last - first : null, rooms });
+    out.push(`[${where}] "${p.title}"  ${p.v.popcount}${first != null && last != null ? `  ·  ${fmtMs(last - first)}` : ''}${slowest ? `  ·  piu' lenta: ${slowest.task} (${fmtMs(slowest.ms)})` : ''}`);
+    for (const r of rooms) out.push(`  ${r.task} ${fmtMs(r.ms).padStart(6)}  ${r.desc}`);
+  }
+  if (asJson) {
+    process.stdout.write(JSON.stringify({ ok: true, popcount: k.popcount, totalMs: kStart != null && kEnd != null ? kEnd - kStart : null, plans: jsonOut }) + '\n');
+    process.exit(0);
+  }
+  console.log(`regno ${k.popcount}${kStart != null && kEnd != null ? `  ·  durata ${fmtMs(kEnd - kStart)}` : ''}`);
+  for (const l of out) console.log(l);
+  process.exit(0);
+}
+
+die(`comando sconosciuto: ${cmd} (new|list|map|next|drop|kanban|mermaid|stats)`);

@@ -101,7 +101,8 @@ DEFINIZIONI
 @14[ordine]:  --after=<slug> mette_i_castelli_in_DAG (fondamenta->torre); kingdom_next=prossima_stanza_al_buio_del_regno_scesa_in_profondita'
 @14[chiuso]:  validate(regno)=TRUE sse OGNI_castello_illuminato; lo_Stop_hook_blocca_sul_REGNO, non_sul_singolo_castello
 @14[dossier]: appunti_per_stanza=<piano>.notes.md (ESENTE_dal_protect: Write/Edit_liberi); scheletro_auto=mermaid_del_piano+scheda_Danilov_per_stanza(@analisi/@decisioni/@esito); note_STRUTTURATE_non_prosa; --note_di_mark=sintesi_1riga, dossier=dettaglio
-@14[kanban]:  castle_kanban[--write]=board(fatto/in_corso/al_buio/fallito)+mappa_mermaid -> VASCEND_KANBAN.md; castle_mermaid=grafo_regno(archi_after+padre->sub, verde=illuminato)
+@14[kanban]:  castle_kanban[--write]=board(fatto/in_corso/al_buio/fallito)+mappa_mermaid -> VASCEND_KANBAN.md; castle_mermaid=grafo_regno(archi_after+padre->sub, verde=illuminato); castle_stats[--json]=durate_per_stanza_dalla_Trace(lente->candidate_a_sub_o_@compact)
+@14[igiene]:  retention=prune.js(regni_CHIUSI>14g_rimossi_a_SessionStart, env=DANILOV_GOAL_RETENTION_DAYS, mai_aperti/sessione_corrente); cwd_canonico=realpath(case+shortname_8.3 -> niente_goal_fantasma)
 @14[compact]: task_marcato_@compact=checkpoint_pianificato(mark_lo_ricorda); PreCompact_hook=foto_del_regno_in_.vascend-compact.md_prima_della_compattazione; SessionStart(compact)_reinietta_il_regno_dopo
 @14[enterprise]: obiettivo_business -> regno_in_fasi: analisi -> struttura(--after) -> esecuzione(--after); dossier_per_le_stanze_pesanti + kanban_per_il_tracking
 

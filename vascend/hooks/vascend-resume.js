@@ -56,6 +56,13 @@ process.stdin.on('end', () => {
     const env = { ...process.env };
     if (sid) env.CLAUDE_CODE_SESSION_ID = String(sid);
 
+    // Retention best-effort: i regni CHIUSI piu' vecchi di N giorni se ne
+    // vanno (prune.js non tocca mai regni aperti ne' la sessione corrente).
+    // Silenzioso: il goalDir non cresce all'infinito, il contesto resta pulito.
+    try {
+      execFileSync('node', [path.join(DANILOV, 'prune.js'), '--json'], { cwd, env, encoding: 'utf8', timeout: 2500 });
+    } catch {}
+
     let j;
     try {
       const out = execFileSync('node', [resumeScript, '--json'], { cwd, env, encoding: 'utf8', timeout: 2500 });

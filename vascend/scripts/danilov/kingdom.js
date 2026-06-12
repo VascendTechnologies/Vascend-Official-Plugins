@@ -121,6 +121,29 @@ function planRow(file, bit) {
 
 function planDesc(file, bit) { const c = planRow(file, bit); return c ? c[3] : ''; }
 
+// Cronologia della Trace di un piano: [{ts, bit, esito}] in ordine di riga,
+// piu' il ts di creazione dall'header. Base delle statistiche di durata: la
+// Trace e' sequenziale, quindi la durata di una stanza ~= delta tra il suo
+// mark e l'evento precedente. Solo lettura, nessuna verifica firma (le
+// durate sono diagnostica, il verdetto resta a core.js).
+function traceTimes(file) {
+  let text; try { text = fs.readFileSync(file, 'utf8'); } catch { return { created: null, events: [] }; }
+  const created = (text.match(/^Creato:\s*(.+)$/m) || [])[1] || null;
+  const start = text.search(/^##\s*2\.\s*Trace/m);
+  const block = start < 0 ? text : text.slice(start);
+  const events = [];
+  for (const line of block.split('\n')) {
+    const c = line.split('|').map(s => s.trim());
+    if (c.length < 9) continue;
+    const bit = parseInt(c[2], 10);
+    if (!Number.isInteger(bit)) continue;
+    const t = Date.parse(String(c[1]).replace(' ', 'T'));
+    if (!Number.isFinite(t)) continue;
+    events.push({ ts: t, bit, esito: String(c[6]).toUpperCase() });
+  }
+  return { created: created ? Date.parse(created.replace(' ', 'T')) : null, events };
+}
+
 // Tutti i task dichiarati di un piano: [{bit, mask, desc, dep}] (per kanban e
 // viste; stessa tolleranza 3/4 colonne del resto del motore).
 function planTasksOf(file) {
@@ -139,4 +162,4 @@ function planTasksOf(file) {
   return out.sort((a, b) => a.bit - b.bit);
 }
 
-module.exports = { kingdomPlans, kingdomVerdict, nextRoom, rootLabel, afterOf, titleOf, planTasksOf };
+module.exports = { kingdomPlans, kingdomVerdict, nextRoom, rootLabel, afterOf, titleOf, planTasksOf, traceTimes };
