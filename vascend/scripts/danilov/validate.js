@@ -72,11 +72,26 @@ function planLines(file, v, lines) {
 
 // --- Modalita' REGNO: tutti i castelli della sessione, in profondita' --------
 if (kingdom) {
+  const asJson = argv.includes('--json');
   const k = kingdomVerdict(process.cwd());
   const lines = [];
   if (!k.exists) {
+    if (asJson) { process.stdout.write(JSON.stringify({ ok: false, error: 'nessun castello per questa sessione' }) + '\n'); process.exit(2); }
     console.error('nessun castello per questa sessione (plan.js per il master, castle.js new per i nominati).');
     process.exit(2);
+  }
+  // JSON per automazioni (CI, board, script): verdetto per castello + regno.
+  if (asJson) {
+    const castles = k.roots.map(r => ({
+      kind: r.kind, slug: r.slug, title: r.title, after: r.after || null,
+      file: r.file, popcount: r.v.popcount, validate: r.v.validate === true,
+      missing: (r.v.missingTasks || []).map(t => t.task),
+      deepOk: deepCheck(r.file, r.v, [], 0),
+      inconsistencies: r.v.inconsistencies,
+    }));
+    const conforme = castles.every(c => c.validate && c.deepOk);
+    process.stdout.write(JSON.stringify({ ok: true, popcount: k.popcount, castles, validate: conforme }) + '\n');
+    process.exit(conforme ? 0 : 1);
   }
   let allOk = true;
   lines.push(`Regno:   ${k.roots.length} castelli  ${k.popcount} stanze`);
