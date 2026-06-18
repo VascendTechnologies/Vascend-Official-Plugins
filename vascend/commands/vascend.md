@@ -6,267 +6,45 @@ argument-hint: "on | off | <obiettivo>"
 # Comando /vascend
 
 `/vascend` è un **interruttore** del metodo Danilov, più una scorciatoia per un
-obiettivo singolo.
+obiettivo singolo. **Il comportamento lo guida l'hook `danilov-trigger.js`**
+(UserPromptSubmit), non questa markdown: l'hook intercetta `on`/`off`/obiettivo
+sul testo grezzo, gestisce flag e goal, e **inietta da sé il metodo completo**
+(la skill `danilov-prompt` + il protocollo di pianificazione). Questo file resta
+volutamente magro: serve solo come **fallback** se gli hook sono disattivati.
 
 ## on / off / obiettivo — cosa fa `$ARGUMENTS`
 
-`$ARGUMENTS` decide il comportamento. **`on`/`off` sono toggle ISTANTANEI**
-(come `/effort`): li gestisce direttamente l'hook `danilov-trigger.js`
-(UserPromptSubmit), che intercetta il comando, alza/abbassa il flag di sessione
-e **blocca il prompt** (`decision:block`) prima ancora che il modello sia
-invocato. In quel caso questa markdown non viene nemmeno espansa: vedi solo la
-conferma in chat. I passi `mode.js` qui sotto restano come **fallback** (se gli
-hook sono disattivati o, in rari casi, arriva a te l'espansione invece di
-`/vascend on`):
+- **`on`** (o argomento **vuoto**): attiva la **modalità STICKY** — da ora ogni
+  prompt è un obiettivo Danilov. All'attivazione l'hook carica la skill e il
+  primer del metodo: conferma in una riga e **NON pianificare, NON creare goal**.
+  Fallback (hook off): `node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mode.js on`.
+- **`off`**: spegne la modalità e l'intero regno della sessione.
+  Fallback (hook off): `node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mode.js off`.
+- **qualsiasi altro testo** = **obiettivo one-shot**: eseguilo col metodo
+  seguendo le istruzioni che l'hook inietta (INDICE/DEFINIZIONI/RELAZIONI, bit
+  one-hot, trace firmata, audit). L'obiettivo è: `$ARGUMENTS`.
 
-- **`on`** (oppure argomento **vuoto**): attiva la **modalità STICKY**. Fallback:
-  ```
-  node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mode.js on
-  ```
-  Poi conferma che da ora **ogni** prompt è un obiettivo Danilov (pianificato,
-  tracciato, validato) senza riscrivere il comando; per spegnere `/vascend off`.
-  **NON pianificare nulla, NON creare goal: fermati qui.**
-- **`off`**: spegni la modalità. Fallback:
-  ```
-  node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mode.js off
-  ```
-  Conferma e **fermati qui**.
-- **qualsiasi altro testo** = **obiettivo one-shot**: è la richiesta da eseguire
-  col metodo, adesso, seguendo i passi qui sotto.
+## Fallback — protocollo essenziale (se l'hook non ha iniettato il metodo)
 
-Quando in modalità sticky arriva un prompt normale (non un comando), l'hook
-inietta da sé le istruzioni del metodo: applica gli stessi passi qui sotto
-trattando quel prompt come obiettivo.
+Tutti gli script stanno in `${CLAUDE_PLUGIN_ROOT}/scripts/danilov/` e ricavano da
+soli il file del goal (`~/.claude/projects/<cwd-encoded>/DanilovGoal/<sid>.md`):
+lanciali senza argomento di file, sempre dalla stessa cartella.
 
-Attiva **tutto** il metodo Danilov in un colpo solo sull'obiettivo.
+1. Carica la skill `danilov-prompt` (tool Skill) se non è già in contesto.
+2. Pianifica: `plan.js "<titolo>" "T01: ..." "T02: ..." ...` (un task per bit).
+   Più workstream = castelli multipli: `castle.js new <slug> "<titolo>" "T01: ..." [--after <slug>]`.
+3. Esegui un task alla volta, in ordine di bit. Per ciascuno: anteprima
+   `mark.js <bit> OK --dry` (verifica `goal`/`cwd`), poi `mark.js <bit> OK`
+   (`FAIL` se fallita; `unmark.js <bit>` per annullare). Specchia nella todo
+   nativa (`status.js --todo`). **Non dichiarare tu il verdetto.**
+4. **REGOLA ANTI-MANOMISSIONE**: mai Edit/Write sui file in `DanilovGoal/` (un
+   hook li nega); la Trace è firmata HMAC. Il dossier `<piano>.notes.md` è invece
+   libero (Write/Edit) per gli appunti per stanza.
+5. Chiudi con `validate.js` (o `validate.js --kingdom` per il regno): il verdetto
+   è `validate(state) == (state == MASK_TARGET)`, deterministico dalla Trace.
 
-## File del goal — nello storage di sessione
-
-Il DanilovGoal vive dentro lo storage della sessione del progetto, accanto
-ai transcript che il `resume` richiama:
-
-```
-~/.claude/projects/<cwd-encoded>/DanilovGoal/<session_id>.md
-```
-
-È per-conversazione e per-progetto, stabile anche per i subagenti. Gli
-script `plan.js`, `mark.js`, `validate.js` ricavano da soli questo path
-(non serve passarlo): lanciali senza argomento di file.
-
-## Esecuzione
-
-L'obiettivo e':
-
-> $ARGUMENTS
-
-Procedi adesso, in quest'ordine, SENZA chiedere conferma.
-
-**Prima di tutto — riprendi il checkpoint se esiste.** Se in `<cwd>` c'è un
-file `.vascend-compact.md` (lasciato da un `/vascend-compact` precedente),
-leggilo PRIMA di pianificare: è la foto compatta dello stato. Riparti da lì
-— gli `@aperto` sono i thread da continuare, gli `@stato` le decisioni da
-non perdere. Incorpora quel contesto nel nuovo piano. Se non esiste, parti
-da zero.
-
-**REGOLA ANTI-MANOMISSIONE:** NON usare MAI Edit/Write/MultiEdit sui file
-in `DanilovGoal/` (un hook li nega). Il file si tocca SOLO tramite gli
-script `plan.js`, `mark.js`, `validate.js`. Le righe di Trace sono firmate
-(HMAC): righe scritte a mano vengono rifiutate dal validatore.
-
-1. Invoca il tool **Skill** con `skill: "danilov-prompt"`.
-2. Costruisci il piano (INDICE/DEFINIZIONI/RELAZIONI, bit one-hot) e
-   **scrivilo eseguendo plan.js** (un task per bit, in ordine):
-   ```
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/plan.js "<titolo>" "T01: ..." "T02: ..." ...
-   ```
-   plan.js calcola `MASK_TARGET`, crea le 4 sezioni e l'intestazione Trace.
-3. **Specchia il piano nella todo list nativa** — così l'utente vede tutti gli
-   obiettivi e il loro avanzamento. Ricava la lista pronta eseguendo:
-   ```
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --todo
-   ```
-   restituisce `{todos:[{content,status,activeForm}]}` con lo stato derivato
-   dalla Trace firmata (la prima stanza al buio è `in_progress`, le altre
-   `pending`). Crea un task nativo per ogni T0k, **nello stesso ordine di
-   bit**, con il tool todo nativo dell'harness — **TaskCreate** (o `TodoWrite`
-   nelle build che lo usano).
-4. Esegui i task UNO ALLA VOLTA, in ordine di bit crescente. Per ogni task:
-   a. annuncia `partito T<nn> 0x<MASK>` (mask = `1 << (nn-1)`);
-   b. esegui l'azione reale;
-   c. **conferma PRIMA di marcare** (anteprima, non scrive) — serve a non
-      marcare il task o il goal sbagliato:
-      ```
-      node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mark.js <bit> OK --dry
-      ```
-      Mostra `goal: <file> "<titolo>" · cwd: <…>`, il task e la transizione.
-      **Verifica che `goal` e `cwd` siano quelli giusti.** Se il goal/cwd è
-      sbagliato NON marcare: correggi il cwd (gli script risolvono il goal da
-      `process.cwd()` — lancia SEMPRE dalla stessa cartella del `plan.js`).
-   d. **marca il completamento ESEGUENDO** (mai a mano):
-      ```
-      node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mark.js <bit> OK
-      ```
-      (`FAIL` se non riuscita). Incolla l'output `completato T<nn> ...`.
-      mark.js stampa sempre `goal`/`cwd`: ricontrollali anche dopo.
-   e. **se hai marcato per sbaglio** (task errato, o cwd/goal sbagliato),
-      annulla — niente Edit a mano, una riga `UNDO` firmata spegne il bit:
-      ```
-      node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/unmark.js <bit>
-      ```
-      poi rifai col bit/goal giusti. L'annullamento resta tracciato.
-   f. **aggiorna la todo nativa**: porta il task appena chiuso a `completed`
-      (**TaskUpdate**) e il successivo a `in_progress`. In dubbio sullo stato,
-      ri-esegui `status.js --todo` e riallinea la todo a quella verità.
-   UNA chiamata = UN bit: vietato saltare task o marcarne piu' insieme.
-5. **NON dichiarare tu il verdetto.** Finiti i task, esegui:
-   ```
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/validate.js
-   ```
-   Calcola `validate(state) == (state == MASK_TARGET)` dalla Trace FIRMATA.
-   Se FALSE, elenca i task da ricontrollare; se segnala MANOMISSIONE, la
-   Trace e' stata alterata fuori da mark.js. Incolla l'output cosi' com'e'.
-   Se restano task in `missing`/FAIL, rifai l'azione + `mark.js` e ri-valida.
-   A castello illuminato, porta tutti i task nativi a `completed`.
-
-## Castelli multipli (il regno)
-
-Un obiettivo grande non è un castello più grosso: è **più castelli**. Il
-master (`plan.js`) è il castello di default; con `castle.js` ne alzi quanti
-ne servono — il loro insieme è il **regno** della sessione, e il verdetto
-finale è del regno intero (lo Stop hook blocca finché OGNI castello è
-illuminato).
-
-```
-node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js new <slug> "<titolo>" "T01: ..." "T02: ..." [--after <slug>]
-node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js list      # radici del regno + verdetti
-node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js map       # mappa completa (castelli -> macro -> micro)
-node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js next      # prossima stanza al buio del regno
-node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/castle.js drop <slug>
-```
-
-- le stanze di un castello si accendono passando il SUO file a `mark.js`:
-  `mark.js <file-castello.md> <bit> OK` (il file lo stampa `castle.js new`);
-- `--after <slug>` mette i castelli in DAG: `mark.js` NEGA ogni stanza del
-  castello finché il prerequisito non è conforme (prima le fondamenta, poi
-  la torre);
-- il verdetto aggregato è `validate.js --kingdom`: TRUE sse ogni castello è
-  illuminato. La vista completa: `status.js --all --pretty` (o `--all --todo`
-  per la todo nativa dell'intero regno).
-
-## Obiettivi business (enterprise): analisi → struttura → esecuzione
-
-Per un obiettivo finale di business ("deploya e trova i clienti", lancio,
-go-to-market) il regno si pianifica in **fasi in DAG**:
-
-1. castello **`analisi`** — brainstorming, ricerca, vincoli, opzioni;
-2. castello **`struttura`** (`--after analisi`) — architettura del lavoro,
-   criteri di done, scelta dei castelli esecutivi;
-3. castelli **esecutivi** (`--after struttura`) — il lavoro vero.
-
-Strumenti dedicati:
-
-- **Appunti per stanza (dossier)**: ogni piano nasce con un gemello
-  `<piano>.notes.md` accanto al file del goal — è ESENTE dal protect hook:
-  scrivi e modifichi liberamente con Write/Edit. Lo scheletro è già
-  STRUTTURATO, niente prosa: un diagramma **mermaid del piano** (nodi=stanze,
-  archi=dep — tienilo aggiornato) e una scheda Danilov per stanza
-  (`@analisi/@decisioni/@esito`). `mark.js` stampa il path dopo ogni
-  marcatura. La colonna `--note` resta per la sintesi a una riga; il dossier
-  è il dettaglio. Piano e Trace restano firmati e intoccabili.
-- **Kanban**: `castle.js kanban` mostra il regno a colonne (fatto / in corso /
-  al buio / fallito) con la provenienza di ogni card; `--write` fissa la board
-  in `VASCEND_KANBAN.md` nel progetto (auto-generata: rigenera, non editare),
-  con in fondo la **mappa mermaid del regno**. Solo il grafo:
-  `castle.js mermaid` (castelli e sub, archi `after`, verde = illuminato).
-- **Checkpoint di contesto pianificati**: marca un task `@compact` nel piano
-  ("T05: ... @compact") — quando lo accendi, mark.js ti ricorda che è il punto
-  ideale per compattare; a piano illuminato l'hint arriva comunque. Il
-  PreCompact hook fotografa il regno in `.vascend-compact.md` prima di ogni
-  compattazione e il SessionStart(compact) lo reinietta dopo.
-
-## Piani gerarchici (macro/micro, profondità RICORSIVA)
-
-Dentro ogni castello i task sono su livelli: i **macro-task** (i bit del
-piano) e, per ogni macro, un eventuale **sotto-piano** di **micro-task** —
-che a sua volta può avere sotto-piani: la gerarchia è ricorsiva senza fondo.
-Il tetto di 30 bit vale per il singolo piano; la scala viene dalla
-composizione (n castelli x profondità), quindi i task possono essere
-infiniti. Un bit con figlio si illumina SOLO quando il figlio è conforme —
-il **roll-up** è garantito da `mark.js` livello per livello, non dalle tue
-parole.
-
-1. **Master** come sopra (`plan.js` coi macro-task `T01..TNN`), o un castello
-   (`castle.js new`).
-2. **Sotto-piano** per un task complesso (`<macroBit>` 0-based, `T01 -> 0`):
-   ```
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/subplan.js [padre.md] <macroBit> "<titolo sub>" "t01: micro" "t02: micro" ...
-   ```
-   senza `padre.md` il padre è il master; col padre esplicito (castello o
-   altro sub) crei il livello successivo: `<base-padre>.sub<bit>.md`.
-3. **Progettazione parallela coi sotto-agenti `vascend-planner`** (opzionale,
-   consigliato per piani ampi): dopo aver creato il master, lancia **in
-   parallelo** (Agent tool con `subagent_type: vascend-planner`, una sola
-   risposta con più tool-call) un planner per macro-task. A ciascuno passa un
-   **brief numerico Danilov** del suo macro-task; ognuno restituisce la lista di
-   micro-task `t01..`. Poi TU crei i sotto-piani con `subplan.js` (gli script li
-   tocchi solo tu, mai i sotto-agenti). Per **eseguire** una stanza puoi
-   delegarla a `vascend-executor` (Agent tool, `subagent_type: vascend-executor`):
-   passagli il path degli script, il `<bit>` (e il `<file>` del sub) e il `cwd`;
-   fa il lavoro reale e marca via script, senza toccare il goal.
-4. **Esecuzione gerarchica**, in ordine di macro-bit:
-   - accendi i micro del sotto-piano (passa il FILE del sub):
-     ```
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mark.js <sub.md> <microBit> OK
-     ```
-   - quando il sotto-piano è completo, accendi il macro sul master:
-     ```
-     node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/mark.js <macroBit> OK
-     ```
-     `mark.js` **rifiuta** se il sotto-piano non è conforme (roll-up negato).
-   - un macro-task **senza** sotto-piano si accende direttamente (atomico).
-5. **Vista e verdetto gerarchici**:
-   ```
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --pretty    # albero macro -> micro (ricorsivo)
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --todo      # todo nativa con micro indentati
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/status.js --all --pretty  # l'intero regno
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/validate.js --deep    # un piano + figli RICORSIVI + coerenza roll-up
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/danilov/validate.js --kingdom # verdetto del regno (tutti i castelli)
-   ```
-   Specchia nella todo nativa anche i micro (`status.js --todo` li emette già
-   indentati): l'utente vede l'intero albero degli obiettivi.
-
-## Come comunichi in chat
-
-In DanilovGoal pensi in relazioni, non in frasi. Ogni evento è una relazione
-tra il file (entità/indice) e cosa vuoi ottenerne (definizione), legati
-dall'azione. Forma compatta (v2), una riga per evento:
-```
-<azione> <target>[>obiettivo] [| <nota>]
-```
-azione ∈ read/find/plan/edit/new/fix/error/run/test/warn/skip/next — apre la
-riga, niente `@`. `<target>` è il file/entità; `>obiettivo` lega in snake_case
-cosa vuoi (senza spazi attorno al `>`, omettibile se ridondante); `| nota` è
-opzionale. ANCHE le transizioni escono così. Mappa: `"leggo X per Y" -> read
-X>Y`, `"T03: aggiungo Y" -> edit file>Y`, `"procedo a T03" -> partito T03
-0xMASK`. Niente `→` unicode né `[ ]`: ~2 token di sintassi per riga invece di
-~5. Le RELAZIONI dei prompt strutturati restano col `→`/`↔` (quello è il
-grafo, non la voce). Le righe di protocollo (`partito`) e l'output di
-mark.js/validate.js restano come sono. Niente preamboli/chiusure; il pensiero
-esteso lo affidi al file.
-
-```
-partito T01 0x0001
-edit parser.py>parser_p7m | nuovo, asn1crypto + fallback
-run pytest>backend_verde | 6 passed
-completato T01 0x0001 | state 0x0000 -> 0x0001 | OK     ← output di mark.js
-partito T02 0x0002
-error models.py>migration | colonna duplicata, rinomino
-fix models.py>migration | enrichment_id univoco, ok
-completato T02 0x0002 | state 0x0001 -> 0x0003 | OK
-...
-<output di validate.js con Result finale>
-```
-
-`partito` e le righe-evento le scrivi tu (sintetiche); `completato` e
-`Result` vengono dagli script (deterministici). Nessun preambolo ne'
-conclusione discorsiva: il ragionamento esteso vive nel file.
+In chat pensi in relazioni, non in frasi: una riga per evento
+`<azione> <target>>obiettivo | nota` (azione ∈ read/find/plan/edit/new/fix/error/
+run/test/warn/skip/next). Niente preamboli/chiusure: il pensiero esteso vive nel
+file. `partito T<nn> 0x<MASK>` lo scrivi tu; `completato`/`Result` vengono dagli
+script.

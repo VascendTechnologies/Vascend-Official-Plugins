@@ -407,15 +407,10 @@ process.stdin.on('end', () => {
     // prima volta della sessione: dopo e' gia' in contesto.
     const skillContent = wasInstructed ? '' : loadSkillContent();
 
-    // /vascend <obiettivo>: il comando slash emette gia' le istruzioni di piano.
-    if (isObjective) {
-      const tail = (memNote ? memNote.trim() : '') + skillNote + rotNote + fileNote + skillContent;
-      if (tail) process.stdout.write(tail);
-      process.exit(0);
-    }
-
-    // keyword o prompt-sticky: nessun comando slash -> le istruzioni le emette
-    // l'hook. Blocco completo solo la prima volta della sessione; poi promemoria.
+    // obiettivo slash, keyword o prompt-sticky: le istruzioni del metodo le emette
+    // SEMPRE l'hook (il markdown del comando ora e' solo uno stub di fallback, non
+    // porta piu' il protocollo). Blocco completo solo la prima volta della
+    // sessione; poi il promemoria breve (skill gia' in contesto).
     process.stdout.write((wasInstructed ? REMINDER : INSTRUCTIONS) + memNote + skillNote + rotNote + fileNote + skillContent);
   } catch {}
 });
