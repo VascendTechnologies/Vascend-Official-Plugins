@@ -2,9 +2,10 @@
 // UserPromptSubmit Hook: attivazione del metodo Danilov (comando /vascend).
 //  - `/vascend on` (o `/vascend` senza argomento)  -> MODALITA' STICKY: da quel
 //    momento OGNI prompt e' un obiettivo Danilov, senza riscrivere il comando.
-//    TOGGLE ISTANTANEO (come /effort): il prompt viene BLOCCATO qui (decision:block),
-//    la modalita' si attiva subito in chat e il modello non viene invocato.
-//  - `/vascend off` / `/vascend-clear` / "annulla vascend" -> spegne tutto (idem, block).
+//    All'attivazione INNESCA LA COMBO: inietta la skill danilov-prompt + il primer
+//    del metodo (additionalContext) e sopprime il prompt grezzo, cosi' il modello
+//    carica il metodo e conferma in una riga (senza pianificare). NON blocca.
+//  - `/vascend off` / `/vascend-clear` / "annulla vascend" -> spegne tutto (block).
 //  - `/vascend <obiettivo>`  -> obiettivo one-shot (non sticky).
 //  (riconosce anche i vecchi alias /danilov* per transizione.)
 //  - keyword del metodo      -> attiva su quel prompt.
@@ -240,6 +241,18 @@ const INSTRUCTIONS =
   'APPUNTI ricchi per stanza nel dossier `<piano>.notes.md` (Write/Edit liberi, il protect li esenta); ' +
   'board visiva: `castle.js kanban --write` -> VASCEND_KANBAN.md.';
 
+// Primer di ATTIVAZIONE (`/vascend on`): non un toggle muto, ma l'innesco della
+// combo. Si inietta SUBITO la skill + il metodo, il modello conferma in una riga
+// e attende l'obiettivo. NON pianifica (non c'e' ancora un obiettivo).
+const ON_PRIMER =
+  '[Vascend] Modalita\' STICKY ATTIVATA. La skill `danilov-prompt` e\' caricata QUI ' +
+  'SOTTO dall\'hook (gia\' attiva, NON chiamare il tool Skill): applicala da ora. Da ' +
+  'questo momento OGNI prompt e\' un obiettivo Danilov (pianifica con `node ' + scriptsPath +
+  '/plan.js`, marca con `mark.js <bit> OK`, valida con `validate.js`); piu\' workstream = ' +
+  'CASTELLI MULTIPLI (`castle.js new ...`). ORA pero\' NON pianificare e NON creare goal: ' +
+  'conferma in UNA riga che la modalita\' e\' attiva e il metodo caricato, poi attendi ' +
+  'l\'obiettivo. Per spegnere: /vascend off.';
+
 // Promemoria breve per i turni SUCCESSIVI della stessa sessione sticky: il blocco
 // INSTRUCTIONS completo (~300 token) si inietta una volta sola, non a ogni prompt.
 const REMINDER =
@@ -330,17 +343,25 @@ process.stdin.on('end', () => {
       return;
     }
 
-    // --- ON: accende la modalita' STICKY (toggle istantaneo, come /effort); NON pianifica ---
-    // Blocca il prompt: la modalita' si attiva subito in chat, il modello non viene
-    // invocato (niente espansione del comando da interpretare).
+    // --- ON: accende la modalita' STICKY E innesca la combo di attivazione ---
+    // NON blocca (un block impedirebbe al modello di agire): inietta la skill +
+    // il primer del metodo come contesto e SOPPRIME il prompt grezzo. Cosi' la
+    // modalita' si accende, la skill e' subito caricata e il modello conferma in
+    // una riga senza pianificare. Marca `instructed`: i prossimi turni della
+    // sessione ricevono solo il promemoria breve (skill gia' in contesto).
     if (isOn) {
       try {
         fs.mkdirSync(STATE_DIR, { recursive: true });
-        fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: true, cwd, ts: Date.now() }), 'utf8');
+        fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: true, instructed: true, cwd, ts: Date.now() }), 'utf8');
       } catch {}
-      blockPrompt('[Vascend] Modalita\' Vascend STICKY ATTIVA: da ora OGNI prompt e\' un ' +
-        'obiettivo Danilov (pianifica, marca, valida) senza riscrivere il comando. Per spegnere: /vascend off.');
-      return;
+      const primer = ON_PRIMER + loadSkillContent() + (memorySurface(cwd) || '');
+      try {
+        process.stdout.write(JSON.stringify({
+          hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: primer },
+          suppressOriginalPrompt: true,
+        }));
+      } catch {}
+      process.exit(0);
     }
 
     // --- Questo prompt avvia un obiettivo Danilov? ---
