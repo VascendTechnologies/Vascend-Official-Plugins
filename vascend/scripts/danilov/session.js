@@ -159,6 +159,53 @@ function notesFile(planFile) {
 }
 const isNotesName = (n) => /\.notes\.md$/i.test(String(n));
 
+// SKILL CUSTOM per-sessione: il modello, splittando un mega-prompt, puo'
+// generare per i task complessi una "skill" su misura in NOTAZIONE Danilov
+// (.md), abbinata al task con `@skill:<name>` e RICHIAMATA AL VOLO (l'hook ne
+// inietta il contenuto quando quella stanza e' la prossima). Vivono in una dir
+// per-sessione (uuid) co-locata col goal: <goalDir>/<sid>.cskills/<name>.md —
+// scelta robusta agli update del plugin (la cache del plugin viene sostituita)
+// e isolata per progetto+sessione. ESENTI dal protect (autoring libero, come
+// le note): non sono la Trace firmata, nessun vincolo d'integrita'.
+function cskillName(raw) {
+  const s = String(raw || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  return s || null;
+}
+function cskillDir(cwd, sessionId) {
+  const sid = currentSessionId(sessionId) || 'no-session';
+  return path.join(goalDir(cwd), `${sid}.cskills`);
+}
+function cskillFile(cwd, sessionId, name) {
+  const n = cskillName(name);
+  return n ? path.join(cskillDir(cwd, sessionId), `${n}.md`) : null;
+}
+// Elenca le skill custom della sessione: [{name, file}], ordinate per nome.
+function listCskills(cwd, sessionId) {
+  const dir = cskillDir(cwd, sessionId);
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  return names
+    .filter(n => /\.md$/i.test(n))
+    .map(n => ({ name: n.replace(/\.md$/i, ''), file: path.join(dir, n) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+// Una skill custom (path che vive dentro una dir "*.cskills")? -> protect la esenta.
+const isCskillPath = (p) => /[\\/][^\\/]+\.cskills[\\/]/i.test(String(p));
+
+// Risolve un riferimento `@skill:<name>` a CUSTOM o REGISTRY:
+//  - custom:   esiste <sid>.cskills/<name>.md -> {kind:'custom', file, content}
+//              l'hook inietta `content` inline (attivazione "sul momento").
+//  - registry: nessun file custom -> {kind:'registry'} -> e' una skill del
+//              registro Claude Code, il modello la carica col tool Skill.
+function resolveSkill(name, cwd, sessionId) {
+  const file = cskillFile(cwd, sessionId, name);
+  if (file) {
+    try { return { name, kind: 'custom', file, content: fs.readFileSync(file, 'utf8') }; }
+    catch {}
+  }
+  return { name, kind: 'registry', file: null, content: null };
+}
+
 // --- Legacy (compat con chiamanti esistenti): figli del MASTER -----------------
 // Sotto-piano (sub-goal) di un macro-bit del master: <sid>.sub<macroBit>.md.
 function subGoalFile(cwd, sessionId, macroBit) {
@@ -210,6 +257,31 @@ function releaseGoalLock(lockDir) {
   try { fs.rmdirSync(lockDir); } catch {}
 }
 
+// STATO context-rot per-sessione: units accumulate dall'ultimo compact.
+// mark.js le incrementa col peso del task; il PreCompact hook le AZZERA (un
+// compact riduce il contesto -> la stima cala). File in .danilov-state/<sid>.rot.json.
+function rotFile(sessionId) {
+  const sid = String(currentSessionId(sessionId) || 'no-session');
+  return path.join(STATE_DIR, `${sid}.rot.json`);
+}
+function readRot(sessionId) {
+  try { const j = JSON.parse(fs.readFileSync(rotFile(sessionId), 'utf8')); return { units: j.units || 0, compacts: j.compacts || 0 }; }
+  catch { return { units: 0, compacts: 0 }; }
+}
+function addRot(delta, sessionId) {
+  const cur = readRot(sessionId);
+  const next = { units: Math.max(0, cur.units + (delta || 0)), compacts: cur.compacts, ts: new Date().toISOString() };
+  try { fs.mkdirSync(STATE_DIR, { recursive: true }); fs.writeFileSync(rotFile(sessionId), JSON.stringify(next), 'utf8'); } catch {}
+  return next;
+}
+// Il compact azzera le units e conta l'evento (danilov-compact influisce sulla stima).
+function resetRot(sessionId) {
+  const cur = readRot(sessionId);
+  const next = { units: 0, compacts: cur.compacts + 1, ts: new Date().toISOString() };
+  try { fs.mkdirSync(STATE_DIR, { recursive: true }); fs.writeFileSync(rotFile(sessionId), JSON.stringify(next), 'utf8'); } catch {}
+  return next;
+}
+
 // sessionId: di solito input.session_id; fallback env.
 function isDanilovActive(sessionId) {
   const sid = currentSessionId(sessionId);
@@ -229,6 +301,8 @@ module.exports = {
   castleSlug, castleFile, listCastles,
   childGoalFile, listChildGoals, listDescendants, listSessionPlans, parentOf,
   notesFile, isNotesName,
+  cskillName, cskillDir, cskillFile, listCskills, isCskillPath, resolveSkill,
+  rotFile, readRot, addRot, resetRot,
   writeGoalAtomic, acquireGoalLock, releaseGoalLock,
   encodeCwd, canonicalCwd, currentSessionId, CLAUDE_DIR,
 };

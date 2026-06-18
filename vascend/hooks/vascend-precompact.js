@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 
 const DANILOV = path.join(__dirname, '..', 'scripts', 'danilov');
-const { currentSessionId } = require(path.join(DANILOV, 'session.js'));
+const { currentSessionId, readRot, resetRot } = require(path.join(DANILOV, 'session.js'));
 const { kingdomVerdict, nextRoom, rootLabel } = require(path.join(DANILOV, 'kingdom.js'));
 
 const BLOCK_OPEN = '<!-- vascend:regno:auto -->';
@@ -68,7 +68,12 @@ process.stdin.on('end', () => {
       : (cur.trim() ? cur.replace(/\s*$/, '\n\n') + block + '\n' : block + '\n');
     fs.writeFileSync(ckFile, out, 'utf8');
 
-    console.log(`[Vascend] foto del regno (${k.popcount}) fissata in .vascend-compact.md prima della compattazione (${trigger}).`);
+    // Il compact riduce il contesto: AZZERA le units di context-rot (la stima
+    // riparte da zero dopo la compattazione -> danilov-compact influisce sulla rot).
+    let rotMsg = '';
+    try { const before = readRot(sid).units; resetRot(sid); rotMsg = ` · context-rot azzerato (era ${before} units)`; } catch {}
+
+    console.log(`[Vascend] foto del regno (${k.popcount}) fissata in .vascend-compact.md prima della compattazione (${trigger})${rotMsg}.`);
   } catch {}
   process.exit(0);
 });

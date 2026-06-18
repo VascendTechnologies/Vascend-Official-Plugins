@@ -48,6 +48,11 @@ DEFINIZIONI
 @4[bit]:     ogni_riga_@ -> bit=K(one-hot), MASK_TARGET=(1<<TOT_BIT)-1, limite=16bit
 @4[sezioni]: file_a_4_sezioni=[1.Pianificazione, 2.Trace, 3.Validazione, 4.Riepilogo]
 @4[quando]:  on=piano_multi-step_con_audit | off=generazione_one-shot
+@4[ingresso]: ATTIVAZIONE=`/vascend on`(sticky) | `/vascend <obiettivo>`(one-shot) | KEYWORD(danilov goal/...) | `/goal <obiettivo>`(comando NATIVO di Claude Code: il trigger lo detecta -> alza sticky vascend + CARICA la skill); la_skill_danilov-prompt_la_CARICA_l'HOOK iniettandone_il_SKILL.md_nel_contesto(forzata, NON_chiami_il_tool_Skill), una_volta_per_sessione(instructed)
+@4[skill]:   token_INLINE_nel_desc=`@skill:<slug>[,<slug>]`(come_@compact, NON_strippato -> persiste_nel_piano); abbina_skill_a_un_task; slug_namespaced_ok(`plugin:skill`); l'hook_trigger+mark.js_RICORDANO(card "skill da attivare"/riga)_di_caricarle_col_tool_Skill_PRIMA_di_lavorare_la_stanza; l'hook_NON_invoca(solo_il_modello_via_tool): le_attiva_iniettando_la_direttiva
+@4[file]:    PREFETCH FILE: token_INLINE=`@file:<path>[,<path>]`(path_senza_spazi, virgola-separati, relativi_al_cwd); abbini_file_a_un_task_IN_FASE_DI_PROGETTAZIONE -> quando_quella_stanza_e'_la_prossima_l'hook_LEGGE+INIETTA_il_contenuto(card "file pre-caricati" + blocchi BEGIN/END FILE) cosi'_NON_spendi_un_giro_di_tool_a_rileggerli; cap_per-file=DANILOV_PREFETCH_MAXBYTES(8000)+numero=DANILOV_PREFETCH_MAXFILES(6), nota_se_troncato/mancante; mark.js_ricorda_i_file_della_prossima_stanza
+@4[rot]:     CONTEXT-ROT (degrado col riempirsi del contesto): peso_task=`@w:<1-5>`(inline, default_1; il_modello_lo_stima); PREVIEW=`node rot.js`(units_dall'ultimo_compact + peso_stanze_al_buio vs budget DANILOV_ROT_BUDGET=40 -> pct/band verde/giallo/rosso + proiezione_fine_regno); l'hook_mostra_la_card_in_pianificazione; REGOLA: se_proiezione_giallo/rosso SUDDIVIDI_i_complessi(subplan)+marca_@compact_dopo_i_pesanti(resetta_la_rot), BATCHA_i_semplici; mark.js_somma_il_peso_alle_units, il_PreCompact(danilov-compact)_le_AZZERA -> il_compact_INFLUISCE_sulla_stima
+@4[cskill]:  SKILL CUSTOM per-sessione: per_un_task_complesso_GENERI_una_skill_su_misura_in_notazione_Danilov(.md) -> `node cskill.js new <name>`(scaffold)+riempi(Edit/`cskill.js set <name> --from file`); vive_in_<goalDir>/<sid>.cskills/<name>.md(per-uuid, ESENTE_dal_protect); abbinala_col_token_@skill:<name>; l'hook_RISOLVE: custom(file_esiste)->INIETTA_il_contenuto_inline_AL_VOLO(no_registro/no_tool), registry(no_file)->carica_col_tool_Skill; USO: un_MEGA-PROMPT_lo_SPEZZI_in_task(plan/castle/subplan), ai_complessi_abbini_una_cskill -> ogni_stanza_riceve_la_sua_skill_quando_tocca_a_lei
 
 @5[plan]:     cmd=`node ~/.claude/scripts/danilov/plan.js "<titolo>" "T01: ..." "T02: ..." ...`, effetto=crea_piano+MASK_TARGET+header_trace (castello_di_DEFAULT)
 @5[castle]:   cmd=`node ~/.claude/scripts/danilov/castle.js new <slug> "<titolo>" "T01: ..." [--after <slug>]`, effetto=castello_NOMINATO_in_piu' (illimitati); sub=list|map|next|drop|kanban[--write]|mermaid; --after=gate_cross-castello(mark_negato_finche'_prerequisito_non_conforme)
@@ -121,6 +126,10 @@ RELAZIONI
 @R12: @14[regno] → @13[castello]  [ il regno contiene n castelli; ognuno ha la sua pianta ]
 @R13: @5[subplan] → @5[mark]   [ il roll-up sale dal piano più profondo, livello per livello ]
 @R14: @14[ordine] → @5[mark]   [ --after gata il mark: prima le fondamenta, poi la torre ]
+@R15: @4[skill]  → @7[enforce] [ l'hook legge @skill della prossima stanza e ricorda di caricare le skill prima di lavorarla ]
+@R16: @4[cskill] → @4[skill]   [ una skill custom di sessione si abbina con lo stesso token @skill:<name>; l'hook ne inietta il contenuto al volo ]
+@R17: @14[compact] → @4[rot]    [ il compact (PreCompact) azzera le units: la stima di context-rot cala dopo ogni compattazione ]
+@R18: @4[file]   → @7[enforce] [ i file @file della prossima stanza l'hook li precarica nel contesto, senza giri di tool ]
 
 OUTPUT: comportamento dell'agente Danilov — pensa, delega, esegue, comunica
 e valida tutto nella stessa notazione, con verdetto deterministico.

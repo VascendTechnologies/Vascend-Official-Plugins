@@ -8,8 +8,8 @@
 'use strict';
 
 const fs = require('fs');
-const { computeVerdict, hex, popcount } = require('./core.js');
-const { listSessionPlans, listChildGoals } = require('./session.js');
+const { computeVerdict, hex, popcount, taskSkills, taskLabel, taskWeight, estimateRot } = require('./core.js');
+const { listSessionPlans, listChildGoals, readRot } = require('./session.js');
 
 // Header "After: <slug>" di un castello: dipendenza cross-castello (il
 // castello non si marca finche' il prerequisito non e' conforme).
@@ -92,9 +92,10 @@ function descend(plan, trail) {
     }
     // sub conforme, macro ancora spento -> la prossima mossa E' il roll-up.
   }
+  const desc = planDesc(plan.file, target.bit);
   return {
     file: plan.file, bit: target.bit, task: target.task, mask: hex(target.mask),
-    desc: planDesc(plan.file, target.bit), trail,
+    desc, skills: taskSkills(desc), trail,
   };
 }
 
@@ -162,4 +163,25 @@ function planTasksOf(file) {
   return out.sort((a, b) => a.bit - b.bit);
 }
 
-module.exports = { kingdomPlans, kingdomVerdict, nextRoom, rootLabel, afterOf, titleOf, planTasksOf, traceTimes };
+// PREVIEW del CONTEXT-ROT del regno: units accumulate dall'ultimo compact +
+// somma dei pesi @w delle stanze ANCORA AL BUIO -> stima pct/band (vedi
+// core.estimateRot). Fonte unica per rot.js (CLI) e per la card dell'hook.
+function rotSummary(cwd, sessionId) {
+  const plans = kingdomPlans(cwd, sessionId);
+  const dark = [];
+  for (const p of plans) {
+    const st = p.v.state >>> 0;
+    for (const t of planTasksOf(p.file)) {
+      if ((st & (t.mask >>> 0)) !== 0) continue; // gia' illuminata
+      dark.push({ task: taskLabel(t.bit), slug: p.slug, bit: t.bit, weight: taskWeight(t.desc), desc: t.desc });
+    }
+  }
+  const plannedWeight = dark.reduce((s, d) => s + d.weight, 0);
+  const units = readRot(sessionId).units;
+  const compacts = readRot(sessionId).compacts;
+  const est = estimateRot({ units, plannedWeight });
+  const heavy = dark.filter(d => d.weight >= 3).sort((a, b) => b.weight - a.weight);
+  return { units, compacts, plannedWeight, darkRooms: dark.length, est, heavy, dark };
+}
+
+module.exports = { kingdomPlans, kingdomVerdict, nextRoom, rootLabel, afterOf, titleOf, planTasksOf, traceTimes, rotSummary };

@@ -18,8 +18,8 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { deriveState, computeVerdict, hex, taskLabel } = require('./core.js');
-const { goalFile, childGoalFile, notesFile, writeGoalAtomic, acquireGoalLock, releaseGoalLock } = require('./session.js');
+const { deriveState, computeVerdict, hex, taskLabel, taskSkills, taskWeight, taskFiles } = require('./core.js');
+const { goalFile, childGoalFile, notesFile, writeGoalAtomic, acquireGoalLock, releaseGoalLock, addRot } = require('./session.js');
 const { signRow } = require('./crypto.js');
 
 // Flag: --dry (anteprima), --force (bypassa il gate dipendenze), --note "<t>"
@@ -99,6 +99,26 @@ function planDeps(b) {
   if (!c || c.length < 6 || !c[4] || c[4] === '-') return [];
   return c[4].split(',').map(x => parseInt(x, 10)).filter(n => Number.isInteger(n) && n >= 0);
 }
+// Skill abbinate a un bit (token @skill: nel desc del piano): [] se assenti.
+function bitSkills(b) { return taskSkills(planDesc(b)); }
+// Prossima stanza al buio nel PIANO corrente dopo l'accensione (state `st`):
+// bit piu' basso in MASK_TARGET non acceso e con dep gia' soddisfatte. Serve a
+// ricordare di caricare le sue skill prima di lavorarla, anche se nello stesso
+// turno (l'hook UserPromptSubmit scatta una volta, qui copre i mark successivi).
+// Ritorna {bit, task, skills} o null.
+function nextDarkInPlan(st) {
+  const mtLocal = (text.match(/MASK_TARGET\s*=\s*(0x[0-9a-fA-F]+)/) || [])[1];
+  if (!mtLocal) return null;
+  const tgt = parseInt(mtLocal, 16) >>> 0;
+  for (let b = 0; b < 30; b++) {
+    const mb = (1 << b) >>> 0;
+    if ((tgt & mb) === 0 || (st & mb) !== 0) continue;
+    if (planDeps(b).some(d => (st & ((1 << d) >>> 0)) === 0)) continue; // dep al buio
+    return { bit: b, task: taskLabel(b), skills: bitSkills(b) };
+  }
+  return null;
+}
+
 const ctx = `goal: ${path.basename(file)} "${title}" · cwd: ${process.cwd()}`;
 
 // La stanza deve appartenere al piano (MASK_TARGET), se gia' definito.
@@ -169,6 +189,8 @@ if (dry) {
     already ? `stato: gia' acceso ${hex(pre)} (marcare di nuovo non avrebbe effetto)`
             : `transizione: state ${hex(pre)} -> ${hex(post)}`];
   if (deps.length) out.push(`dep: ${deps.map(d => taskLabel(d)).join(', ')}${depMissing.length ? ` -> AL BUIO: ${depMissing.map(d => taskLabel(d)).join(', ')} (mark negato senza --force)` : ' (tutte accese)'}`);
+  const drySkills = bitSkills(bit);
+  if (drySkills.length) out.push(`skill abbinate: ${drySkills.join(', ')} -> caricale col tool Skill prima di lavorare la stanza`);
   if (noteClean) out.push(`nota: ${noteClean}`);
   if (check != null) out.push(`gate: "${check}" (verra' eseguito al mark reale; bit acceso solo se exit 0)`);
   if (afterGate && !afterGate.missing) out.push(`after: castello "${afterGate.slug}" ${afterGate.conforme ? 'conforme (gate aperto)' : `NON conforme (${afterGate.popcount}) -> mark negato senza --force`}`);
@@ -251,6 +273,27 @@ writeGoalAtomic(file, lines.join('\n'));
 const verb = esito === 'OK' ? 'completato' : 'FALLITO';
 const tail = esito === 'OK' ? '' : ' (bit non acceso)';
 console.log(`${verb} ${taskLabel(bit)} ${hex(mask)} | state ${hex(pre)} -> ${hex(post)}${tail} | ${esito}${noteClean ? ` | nota: ${noteClean}` : ''}`);
+
+// Context-rot: una stanza completata aggiunge "units" pari al suo peso (@w).
+// Le units stimano il riempimento del contesto dall'ultimo compact; il
+// PreCompact hook le azzera. Best-effort: non deve mai bloccare la marcatura.
+if (esito === 'OK') {
+  try { addRot(taskWeight(planDesc(bit))); } catch {}
+}
+
+// Skill della PROSSIMA stanza al buio: ricorda di caricarle (tool Skill) prima
+// di lavorarla. Coperto anche dall'hook UserPromptSubmit, ma quello scatta una
+// sola volta per prompt: questo copre i mark successivi nello stesso turno.
+if (esito === 'OK') {
+  const nx = nextDarkInPlan(post);
+  if (nx && nx.skills.length) {
+    console.log(`skill prossima stanza ${nx.task}: ${nx.skills.join(', ')} -> caricale col tool Skill prima di eseguirla`);
+  }
+  if (nx) {
+    const nf = taskFiles(planDesc(nx.bit));
+    if (nf.length) console.log(`file prossima stanza ${nx.task}: ${nf.join(', ')} -> l'hook li precarica al prossimo prompt (gia' pianificati)`);
+  }
+}
 
 // Appunti del piano: dossier libero per stanza (Write/Edit ammessi: il
 // protect hook esenta *.notes.md). La colonna --note resta per la sintesi;

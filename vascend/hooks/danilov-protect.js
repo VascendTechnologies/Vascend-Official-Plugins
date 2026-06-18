@@ -26,14 +26,16 @@ process.stdin.on('end', () => {
     if (Array.isArray(ti.edits)) for (const e of ti.edits) if (e && e.file_path) targets.push(e.file_path);
 
     // Qualsiasi file dentro una cartella "DanilovGoal" (ovunque: ora i goal
-    // vivono in ~/.claude/projects/<cwd>/DanilovGoal/). ESENTI gli APPUNTI
-    // (*.notes.md): sono il dossier libero per-stanza — markdown ricco che
-    // l'agente scrive e riscrive con Write/Edit normali. Non concorrono al
-    // verdetto (piano e Trace restano firmati e blindati).
+    // vivono in ~/.claude/projects/<cwd>/DanilovGoal/). ESENTI: gli APPUNTI
+    // (*.notes.md) — dossier libero per-stanza — e le SKILL CUSTOM (dentro una
+    // dir "*.cskills/") — generate/affinate liberamente dal modello e iniettate
+    // al volo dall'hook. Non concorrono al verdetto (piano e Trace restano
+    // firmati e blindati).
     const hit = targets.some(t => {
       try {
         const norm = path.resolve(t).toLowerCase().replace(/\\/g, '/');
-        return /(^|\/)danilovgoal\//.test(norm) && !/\.notes\.md$/.test(norm);
+        const exempt = /\.notes\.md$/.test(norm) || /\/[^/]+\.cskills\//.test(norm);
+        return /(^|\/)danilovgoal\//.test(norm) && !exempt;
       } catch { return false; }
     });
 

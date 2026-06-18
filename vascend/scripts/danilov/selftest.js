@@ -369,6 +369,118 @@ try {
   check('AC2 prune: regno APERTO vecchio intatto', fs.existsSync(path.join(gdir, 'old-open-sid.castle-aperto.md')));
   check('AC3 prune: sessione corrente intatta', fs.existsSync(cfile('doppio')));
 
+  // --- Scenario SK: skill abbinate ai task (@skill) — parser, surfacing, hook.
+  // Parser puro (core).
+  check('SK1 taskSkills: inline + dedup', JSON.stringify(core.taskSkills('T01: x @skill:alpha,alpha,beta')) === JSON.stringify(['alpha', 'beta']));
+  check('SK2 taskSkills: namespaced + separa @dep', JSON.stringify(core.taskSkills('T01: x @skill:pdf-ocr,vascend:foo @dep:0,T02')) === JSON.stringify(['pdf-ocr', 'vascend:foo']));
+  check('SK3 taskSkills: nessun token -> []', core.taskSkills('niente qui').length === 0);
+  const planSK = '## 1. Pianificazione\n| bit | mask | task | dep |\n| 0 | 0x0001 | T01: x @skill:uno,due | - |\n## 2. Trace\n';
+  check('SK4 planSkills: legge dalla riga del piano', JSON.stringify(core.planSkills(planSK, 0)) === JSON.stringify(['uno', 'due']));
+  // Surfacing reale via mark.js + hook, in sessione ISOLATA.
+  const envSK = { ...env, CLAUDE_CODE_SESSION_ID: 'skill-sid' };
+  const optsSK = { env: envSK, cwd: proj };
+  run(PLAN, ['mega prompt diviso', 'T01: estrai pdf @skill:alpha', 'T02: analizza @skill:beta,gamma @dep:T01'], optsSK);
+  const gfSK = path.join(gdir, 'skill-sid.md');
+  check('SK5 plan con @skill: master creato', fs.existsSync(gfSK));
+  r = run(MARK, [gfSK, '0', 'OK', '--dry'], optsSK);
+  check('SK6 mark --dry: skill del task corrente (alpha)', /skill abbinate:\s*alpha/.test(r.out), r.out);
+  r = run(MARK, [gfSK, '0', 'OK'], optsSK);
+  check('SK7 mark reale: skill della prossima stanza (T02 beta, gamma)', /skill prossima stanza T02:\s*beta, gamma/.test(r.out), r.out);
+  // L'hook DEVE girare nella sessione 'skill-sid' (env, non solo payload: env vince).
+  const pSK = spawnSync('node', [path.join(HOOKS, 'danilov-trigger.js')],
+    { ...optsSK, input: JSON.stringify({ session_id: 'skill-sid', cwd: proj, prompt: 'danilov goal continua' }), encoding: 'utf8' });
+  const outSK = (pSK.stdout || '') + (pSK.stderr || '');
+  // Assert sull'HEADER della card (non sulla prosa di INSTRUCTIONS che cita la card).
+  check('SK8 hook: card "skill da attivare" iniettata', /DANILOV · skill da attivare/.test(outSK), outSK.slice(-400));
+  check('SK9 hook: elenca le skill della prossima stanza (beta, gamma)', /Skill\s+beta, gamma/.test(outSK), outSK.slice(-400));
+
+  // --- Scenario CS: skill CUSTOM per-sessione (cskill.js + injection + protect).
+  const CSKILL = path.join(HERE, 'cskill.js');
+  const envCS = { ...env, CLAUDE_CODE_SESSION_ID: 'cskill-sid' };
+  const optsCS = { env: envCS, cwd: proj };
+  r = run(CSKILL, ['new', 'mia-skill'], optsCS);
+  check('CS1 cskill new: exit 0 + creata', r.code === 0 && /skill custom creata/.test(r.out), r.out);
+  r = run(CSKILL, ['list'], optsCS);
+  check('CS2 cskill list: elenca mia-skill', /mia-skill/.test(r.out), r.out);
+  const csContent = path.join(tmp, 'cs-content.md');
+  fs.writeFileSync(csContent, '# custom\nINDICE\n1 = x\nMARK_UNICO_XYZ\nOUTPUT: y\n', 'utf8');
+  r = run(CSKILL, ['set', 'mia-skill', '--from', csContent], optsCS);
+  check('CS3 cskill set --from: scritta', r.code === 0 && /skill custom scritta/.test(r.out), r.out);
+  const csPath = run(CSKILL, ['path', 'mia-skill'], optsCS).out.trim();
+  check('CS4 cskill path: dentro <sid>.cskills', /cskill-sid\.cskills\/mia-skill\.md$/.test(csPath.replace(/\\/g, '/')), csPath);
+  // piano con un task che richiama la custom + una registry
+  run(PLAN, ['mega prompt', 'T01: complesso @skill:mia-skill,altra-reg', 'T02: coda @dep:T01'], optsCS);
+  const pCS = spawnSync('node', [path.join(HOOKS, 'danilov-trigger.js')],
+    { ...optsCS, input: JSON.stringify({ session_id: 'cskill-sid', cwd: proj, prompt: 'danilov goal continua' }), encoding: 'utf8' });
+  const outCS = (pCS.stdout || '') + (pCS.stderr || '');
+  check('CS5 hook: INIETTA il contenuto della custom inline', /BEGIN SKILL mia-skill[\s\S]*MARK_UNICO_XYZ[\s\S]*END SKILL mia-skill/.test(outCS), outCS.slice(-300));
+  check('CS6 hook: ricorda la registry (altra-reg) col tool Skill', /altra-reg/.test(outCS), outCS.slice(-300));
+  r = runStdin(PROTECT, { tool_input: { file_path: csPath } });
+  check('CS7 protect: skill custom ESENTE (no deny)', !/deny/.test(r.out), r.out.slice(0, 120));
+
+  // --- Scenario RT: context-rot (peso @w, stima, incremento mark, reset precompact, preview, card).
+  check('RT1 taskWeight: default 1 / @w:4', core.taskWeight('x') === 1 && core.taskWeight('y @w:4') === 4 && core.taskWeight('z @w:9') === 1);
+  const e1 = core.estimateRot({ units: 10, plannedWeight: 0, budget: 40 });
+  const e2 = core.estimateRot({ units: 35, plannedWeight: 20, budget: 40 });
+  check('RT2 estimateRot: 10/40 verde 25%', e1.pct === 25 && e1.band === 'verde');
+  check('RT3 estimateRot: 35(+20)/40 rosso, proiezione 100% rosso', e2.band === 'rosso' && e2.projectedPct === 100 && e2.projectedBand === 'rosso', JSON.stringify(e2));
+  const ROT = path.join(HERE, 'rot.js');
+  const envRT = { ...env, CLAUDE_CODE_SESSION_ID: 'rot-sid' };
+  const optsRT = { env: envRT, cwd: proj };
+  run(PLAN, ['kingdom', 'T01: semplice', 'T02: complesso @w:5', 'T03: medio @w:3 @dep:T02'], optsRT);
+  const rotJson = () => { const o = run(ROT, ['--json'], optsRT).out.trim().split('\n').pop(); try { return JSON.parse(o); } catch { return null; } };
+  let jr = rotJson();
+  check('RT4 rot.js --json: plannedWeight 9 (1+5+3), 2 pesanti', !!jr && jr.plannedWeight === 9 && jr.heavy.length === 2, JSON.stringify(jr));
+  const gfRT = path.join(gdir, 'rot-sid.md');
+  run(MARK, [gfRT, '1', 'OK', '--force'], optsRT); // T02 @w:5 (forza: dipende solo dall'ordine, T02 non ha dep)
+  jr = rotJson();
+  check('RT5 mark incrementa units col peso (5)', !!jr && jr.units === 5, JSON.stringify(jr && jr.units));
+  const pRT = spawnSync('node', [path.join(HOOKS, 'vascend-precompact.js')],
+    { ...optsRT, input: JSON.stringify({ session_id: 'rot-sid', cwd: proj, trigger: 'auto' }), encoding: 'utf8' });
+  check('RT6 precompact: annuncia azzeramento rot', /context-rot azzerato/.test((pRT.stdout || '') + (pRT.stderr || '')), (pRT.stdout || '') + (pRT.stderr || ''));
+  jr = rotJson();
+  check('RT7 dopo precompact: units 0, compacts 1', !!jr && jr.units === 0 && jr.compacts === 1, JSON.stringify(jr));
+  const hRT = spawnSync('node', [path.join(HOOKS, 'danilov-trigger.js')],
+    { ...optsRT, input: JSON.stringify({ session_id: 'rot-sid', cwd: proj, prompt: 'danilov goal continua' }), encoding: 'utf8' });
+  check('RT8 hook: card "context rot" iniettata', /DANILOV · context rot/.test((hRT.stdout || '') + (hRT.stderr || '')), ((hRT.stdout || '') + (hRT.stderr || '')).slice(-300));
+
+  // --- Scenario FP: prefetch file (@file) — parser, injection hook, mark reminder.
+  check('FP1 taskFiles: parse + separa @skill', JSON.stringify(core.taskFiles('T01: x @file:src/a.py,docs/b.md @skill:foo')) === JSON.stringify(['src/a.py', 'docs/b.md']));
+  const planFP = '## 1. Pianificazione\n| bit | mask | task | dep |\n| 0 | 0x0001 | T01: x @file:conf.txt | - |\n## 2. Trace\n';
+  check('FP2 planFiles: legge dalla riga', JSON.stringify(core.planFiles(planFP, 0)) === JSON.stringify(['conf.txt']));
+  const envFP = { ...env, CLAUDE_CODE_SESSION_ID: 'fp-sid' };
+  const optsFP = { env: envFP, cwd: proj };
+  fs.writeFileSync(path.join(proj, 'conf.txt'), 'MARKER_PREFETCH_99\n', 'utf8');
+  run(PLAN, ['k', 'T01: leggi @file:conf.txt,assente.txt', 'T02: poi @dep:T01'], optsFP);
+  const hFP = spawnSync('node', [path.join(HOOKS, 'danilov-trigger.js')],
+    { ...optsFP, input: JSON.stringify({ session_id: 'fp-sid', cwd: proj, prompt: 'danilov goal continua' }), encoding: 'utf8' });
+  const outFP = (hFP.stdout || '') + (hFP.stderr || '');
+  check('FP3 hook: INIETTA il contenuto del file', /BEGIN FILE conf\.txt[\s\S]*MARKER_PREFETCH_99[\s\S]*END FILE conf\.txt/.test(outFP), outFP.slice(-300));
+  check('FP4 hook: nota il file mancante', /assente\.txt[\s\S]*NON letto/.test(outFP), outFP.slice(-300));
+  const gfFP = path.join(gdir, 'fp-sid.md');
+  // marca un task fittizio? no: T01 e' la prossima; nessun mark precedente -> testo il reminder marcando un task che lascia T01 prossima non vale.
+  // Verifico il reminder di mark.js: marco T01, la prossima e' T02 (no @file) -> uso invece un piano dedicato dove la prossima ha @file.
+  run(PLAN, ['k2', 'T01: primo', 'T02: dopo @file:conf.txt @dep:T01'], optsFP);
+  const rFP = run(MARK, [gfFP, '0', 'OK'], optsFP);
+  check('FP5 mark.js: ricorda i file della prossima stanza', /file prossima stanza T02:\s*conf\.txt/.test(rFP.out), rFP.out);
+
+  // --- Scenario GC: /goal attiva vascend (sticky) e carica la skill via hook.
+  const TRIGGER = path.join(HOOKS, 'danilov-trigger.js');
+  const envGC = { ...env, CLAUDE_CODE_SESSION_ID: 'gc-sid' };
+  const optsGC = { env: envGC, cwd: proj, encoding: 'utf8' };
+  const flagGC = path.join(cfg, '.danilov-state', 'gc-sid.json');
+  // sessione SENZA sticky: /goal deve attivare comunque.
+  const g1 = spawnSync('node', [TRIGGER], { ...optsGC, input: JSON.stringify({ session_id: 'gc-sid', cwd: proj, prompt: '/goal costruisci X' }) });
+  const og1 = (g1.stdout || '') + (g1.stderr || '');
+  const blockedGC = (() => { try { return !!JSON.parse(og1).decision; } catch { return false; } })();
+  check('GC1 /goal: NON blocca (il goal raggiunge il modello)', !blockedGC, og1.slice(0, 120));
+  check('GC2 /goal: SKILL danilov-prompt iniettata dall\'hook', /BEGIN SKILL danilov-prompt[\s\S]*END SKILL danilov-prompt/.test(og1), og1.slice(-200));
+  const fGC = (() => { try { return JSON.parse(fs.readFileSync(flagGC, 'utf8')); } catch { return null; } })();
+  check('GC3 /goal: flag sticky ON + active', !!(fGC && fGC.sticky && fGC.active), JSON.stringify(fGC));
+  // 2o turno: skill gia' caricata, non re-iniettata.
+  const g2 = spawnSync('node', [TRIGGER], { ...optsGC, input: JSON.stringify({ session_id: 'gc-sid', cwd: proj, prompt: 'continua' }) });
+  check('GC4 2o turno: skill NON re-iniettata (idempotente)', !/BEGIN SKILL danilov-prompt/.test((g2.stdout || '') + (g2.stderr || '')));
+
   // --- Scenario V: trigger /vascend off spegne l'INTERO regno.
   r = runStdin(path.join(HOOKS, 'danilov-trigger.js'), { session_id: SID, cwd: proj, prompt: '/vascend off' });
   check('V1 trigger off: blocca il prompt', /disattivata/.test(r.out), r.out.slice(0, 200));

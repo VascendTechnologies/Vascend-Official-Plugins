@@ -93,6 +93,93 @@ function parsePlanTask(s) {
   return { desc, dep: bits.length ? bits.join(',') : '-' };
 }
 
+// Skill abbinate a un task: token `@skill:<slug>[,<slug>...]` nella descrizione
+// del task (uno o piu' token, anche namespaced `plugin:skill`). Resta INLINE nel
+// desc come `@compact` — non viene strippato da parsePlanTask, quindi persiste
+// nel piano (unico store) e l'hook lo rilegge a ogni turno. Pura: stringa -> slugs
+// deduplicati in ordine di apparizione. Nessun token -> [].
+function taskSkills(desc) {
+  const out = [];
+  const seen = new Set();
+  const re = /@skill:\s*([A-Za-z0-9_,:\-]+)/g;
+  let m;
+  while ((m = re.exec(String(desc || ''))) !== null) {
+    for (const tok of m[1].split(',')) {
+      const slug = tok.trim();
+      if (slug && !seen.has(slug)) { seen.add(slug); out.push(slug); }
+    }
+  }
+  return out;
+}
+
+// File da PREFETCH abbinati a un task: token `@file:<path>[,<path>]` nel desc
+// (inline, come @skill). Quando quella stanza e' la prossima, l'hook ne legge e
+// INIETTA il contenuto: cosi' l'agente trova i file gia' in contesto senza
+// spendere un giro di tool a rileggerli (li ha gia' pianificati in anticipo).
+// Path SENZA spazi (separati da virgola); ammessi / \ . _ - : (drive Windows).
+function taskFiles(desc) {
+  const out = [];
+  const seen = new Set();
+  const re = /@file:\s*([^\s|]+)/g;
+  let m;
+  while ((m = re.exec(String(desc || ''))) !== null) {
+    for (const tok of m[1].split(',')) {
+      const p = tok.trim();
+      if (p && !seen.has(p)) { seen.add(p); out.push(p); }
+    }
+  }
+  return out;
+}
+function planFiles(text, bit) {
+  const start = String(text).search(/^##\s*1\.\s*Pianificazione/m);
+  const end = String(text).search(/^##\s*2\.\s*Trace/m);
+  const block = String(text).slice(start < 0 ? 0 : start, end < 0 ? String(text).length : end);
+  for (const line of block.split('\n')) {
+    const c = line.split('|').map(s => s.trim());
+    if ((c.length === 5 || c.length === 6) && parseInt(c[1], 10) === bit) return taskFiles(c[3]);
+  }
+  return [];
+}
+
+// Skill dichiarate per un bit, leggendo la sua riga nel blocco "1. Pianificazione".
+// Tollera 3 (| bit|mask|task |) o 4 colonne (| bit|mask|task|dep |). [] se assente.
+function planSkills(text, bit) {
+  const start = String(text).search(/^##\s*1\.\s*Pianificazione/m);
+  const end = String(text).search(/^##\s*2\.\s*Trace/m);
+  const block = String(text).slice(start < 0 ? 0 : start, end < 0 ? String(text).length : end);
+  for (const line of block.split('\n')) {
+    const c = line.split('|').map(s => s.trim());
+    if ((c.length === 5 || c.length === 6) && parseInt(c[1], 10) === bit) return taskSkills(c[3]);
+  }
+  return [];
+}
+
+// Peso/complessita' di un task: token `@w:<1-5>` nel desc (default 1). E' il
+// MODELLO a stimarlo in fase di pianificazione: piu' alto = stanza piu' pesante
+// in contesto. Alimenta la stima di context-rot e il consiglio di suddivisione.
+function taskWeight(desc) {
+  const m = String(desc || '').match(/@w:\s*([1-5])\b/);
+  return m ? parseInt(m[1], 10) : 1;
+}
+
+// Stima del CONTEXT-ROT (degrado di qualita' col riempirsi del contesto). Non
+// sono token reali (non accessibili dallo script): e' un PROXY deterministico —
+// `units` accumulate dall'ultimo compact (le aggiunge mark.js col peso del task)
+// + `plannedWeight` del lavoro ancora pianificato, contro un `budget` (env
+// DANILOV_ROT_BUDGET, default 40). Il compact (PreCompact hook) azzera `units`:
+// per questo la stima CALA dopo una compattazione. Ritorna pct/band correnti e
+// proiettati (now + planned). Pura.
+function estimateRot(opts) {
+  const o = opts || {};
+  const budget = o.budget > 0 ? o.budget : 40;
+  const units = Math.max(0, o.units || 0);
+  const planned = Math.max(0, o.plannedWeight || 0);
+  const band = (p) => (p < 50 ? 'verde' : p <= 80 ? 'giallo' : 'rosso');
+  const pct = Math.min(100, Math.round((units / budget) * 100));
+  const projPct = Math.min(100, Math.round(((units + planned) / budget) * 100));
+  return { budget, units, plannedWeight: planned, pct, band: band(pct), projectedPct: projPct, projectedBand: band(projPct) };
+}
+
 // Verdetto deterministico completo.
 function computeVerdict(text) {
   const secMissing = missingSections(text);
@@ -146,4 +233,4 @@ function computeVerdict(text) {
   };
 }
 
-module.exports = { computeVerdict, deriveState, declared, missingSections, hex, popcount, taskLabel, bitsToTasks, parsePlanTask, SECTIONS };
+module.exports = { computeVerdict, deriveState, declared, missingSections, hex, popcount, taskLabel, bitsToTasks, parsePlanTask, taskSkills, planSkills, taskFiles, planFiles, taskWeight, estimateRot, SECTIONS };

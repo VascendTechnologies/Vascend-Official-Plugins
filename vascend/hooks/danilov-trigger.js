@@ -24,9 +24,10 @@ const STATE_DIR = path.join(CLAUDE_DIR, '.danilov-state');
 // Codice: dentro il plugin. __dirname = <plugin>/hooks -> ../scripts/danilov.
 const DANILOV = path.join(__dirname, '..', 'scripts', 'danilov');
 const scriptsPath = DANILOV.replace(/\\/g, '/'); // path POSIX-style per i messaggi all'agente
-const { goalDir, goalFile, listSessionPlans, writeGoalAtomic, currentSessionId } = require(path.join(DANILOV, 'session.js'));
+const { goalDir, goalFile, listSessionPlans, writeGoalAtomic, currentSessionId, resolveSkill } = require(path.join(DANILOV, 'session.js'));
 const ui = require(path.join(DANILOV, 'ui.js'));
-const { kingdomVerdict } = require(path.join(DANILOV, 'kingdom.js'));
+const { kingdomVerdict, nextRoom, rotSummary } = require(path.join(DANILOV, 'kingdom.js'));
+const { taskFiles } = require(path.join(DANILOV, 'core.js'));
 
 const SKELETON = `# DanilovGoal: (in attesa di pianificazione)
 ## 1. Pianificazione
@@ -98,6 +99,99 @@ function relevantMemories(cwd, prompt) {
   return null;
 }
 
+// Skill abbinate alla PROSSIMA stanza al buio del regno: il task le dichiara con
+// `@skill:<slug>[,<slug>]` nel piano e l'hook, a ogni prompt, ricorda al modello
+// di caricarle col tool Skill PRIMA di lavorare quella stanza. L'hook NON puo'
+// invocare la skill (solo il modello lo fa via tool): la "attiva" iniettando la
+// direttiva, come gia' fa per la skill danilov-prompt. null se nessuna skill.
+function skillsToActivate(cwd, sessionId) {
+  try {
+    const nr = nextRoom(cwd, sessionId);
+    if (!nr || !Array.isArray(nr.skills) || !nr.skills.length) return null;
+    // Risolvi ogni @skill: CUSTOM (file di sessione -> contenuto iniettato al
+    // volo) vs REGISTRY (skill di Claude Code -> caricala col tool Skill).
+    const resolved = nr.skills.map(s => resolveSkill(s, cwd, sessionId));
+    const custom = resolved.filter(r => r.kind === 'custom');
+    const registry = resolved.filter(r => r.kind === 'registry');
+    const rows = [];
+    const cleanDesc = String(nr.desc || '').replace(/@skill:[^\s|]+/g, '').replace(/\s{2,}/g, ' ').slice(0, 56).trim();
+    rows.push(ui.kv('Stanza', `${nr.task} ${ui.G.dot} ${cleanDesc}`));
+    if (registry.length) {
+      rows.push(ui.kv('Skill', registry.map(r => r.name).join(', ')));
+      rows.push(ui.kv('', 'CARICALE col tool Skill PRIMA di lavorare la stanza (una per chiamata).'));
+    }
+    if (custom.length) {
+      rows.push(ui.kv('Custom', custom.map(r => r.name).join(', ') + ' (skill di sessione, contenuto sotto)'));
+    }
+    let out = '\n' + ui.card('skill da attivare', rows);
+    // Le skill CUSTOM sono iniettate SUL MOMENTO: il loro contenuto (notazione
+    // Danilov) entra nel contesto qui, senza passare dal registro/tool Skill.
+    for (const c of custom) {
+      out += `\n\n[Vascend] skill custom "${c.name}" per la stanza ${nr.task} (applicala ora):\n` +
+        '----- BEGIN SKILL ' + c.name + ' -----\n' + String(c.content || '').trim() + '\n----- END SKILL ' + c.name + ' -----';
+    }
+    return out;
+  } catch { return null; }
+}
+
+// Card CONTEXT-ROT in fase di pianificazione/esecuzione: preview deterministica
+// (units dall'ultimo compact + peso @w delle stanze al buio vs budget) con
+// consiglio di SUDDIVISIONE (complessi -> subplan + @compact; semplici batch).
+// null quando non c'e' lavoro al buio (regno chiuso) -> niente rumore.
+function rotCard(cwd, sessionId) {
+  try {
+    const r = rotSummary(cwd, sessionId);
+    if (!r || r.darkRooms === 0) return null;
+    const rows = [];
+    rows.push(ui.kv('Rot', `${r.est.pct}% ${ui.G.dot} ${r.est.band} ora -> ${r.est.projectedPct}% ${r.est.projectedBand} a fine regno (units ${r.units}/${r.est.budget})`));
+    if (r.heavy.length) {
+      rows.push(ui.kv('Pesanti', r.heavy.slice(0, 6).map(h => `${h.task}${h.slug ? '@' + h.slug : ''} (w${h.weight})`).join(', ')));
+    }
+    let advice;
+    if (r.est.projectedBand === 'rosso') advice = 'SUDDIVIDI i complessi (subplan) e marca @compact dopo i pesanti per resettare la rot; batcha i semplici.';
+    else if (r.est.projectedBand === 'giallo') advice = 'Valuta @compact dopo le stanze pesanti; raggruppa i semplici.';
+    else advice = 'Margine ampio: procedi.';
+    rows.push(ui.kv('Consiglio', advice));
+    return '\n' + ui.card('context rot', rows);
+  } catch { return null; }
+}
+
+// PREFETCH FILE: i file taggati `@file:` sulla prossima stanza vengono LETTI e
+// iniettati qui (gia' in contesto), cosi' l'agente non spende un giro di tool a
+// rileggerli — lo aveva gia' pianificato in fase di progettazione del regno.
+// Cap per-file (DANILOV_PREFETCH_MAXBYTES, default 8000) e numero file
+// (DANILOV_PREFETCH_MAXFILES, default 6); nota se troncato o non leggibile.
+function filesToPrefetch(cwd, sessionId) {
+  try {
+    const nr = nextRoom(cwd, sessionId);
+    if (!nr) return null;
+    const files = taskFiles(nr.desc);
+    if (!files.length) return null;
+    const maxFiles = parseInt(process.env.DANILOV_PREFETCH_MAXFILES, 10) || 6;
+    const perFile = parseInt(process.env.DANILOV_PREFETCH_MAXBYTES, 10) || 8000;
+    const rows = [ui.kv('Stanza', `${nr.task}`)];
+    const blocks = [];
+    let shown = 0;
+    for (const rel of files) {
+      if (shown >= maxFiles) { rows.push(ui.kv('', `... e altri ${files.length - shown} file non caricati (cap ${maxFiles})`)); break; }
+      shown++;
+      const abs = path.resolve(cwd, rel);
+      let content = null, err = null;
+      try { content = fs.readFileSync(abs, 'utf8'); } catch (e) { err = (e && e.code) || 'errore'; }
+      if (err) { rows.push(ui.li(`${rel} ${ui.G.dot} NON letto (${err})`)); continue; }
+      let body = content, trunc = '';
+      if (body.length > perFile) { body = body.slice(0, perFile); trunc = ` (troncato a ${perFile} di ${content.length} byte)`; }
+      rows.push(ui.li(`${rel} (${content.length} byte)${trunc}`));
+      blocks.push(`----- BEGIN FILE ${rel} -----\n${body}\n----- END FILE ${rel} -----`);
+    }
+    let out = '\n' + ui.card('file pre-caricati', rows);
+    if (blocks.length) {
+      out += `\n\n[Vascend] file pre-caricati per la stanza ${nr.task} (gia' in contesto, NON rileggerli col tool):\n` + blocks.join('\n\n');
+    }
+    return out;
+  } catch { return null; }
+}
+
 // Toggle istantaneo, sul modello di /effort: blocca il prompt PRIMA che arrivi
 // al modello e mostra una conferma pulita all'utente. decision:block + exit 0 ->
 // il modello NON viene mai invocato; `reason` e' mostrato all'utente (non aggiunto
@@ -107,9 +201,24 @@ function blockPrompt(reason) {
   process.exit(0);
 }
 
+// CARICA la skill danilov-prompt DAL hook: ne legge il SKILL.md e lo inietta nel
+// contesto. Cosi' il metodo e' attivo SENZA che il modello debba chiamare il
+// tool Skill (forzato, non suggerito). Vuoto se il file non e' leggibile (non
+// blocca mai l'attivazione). Iniettato una volta per sessione (vedi instructed).
+function loadSkillContent() {
+  try {
+    const f = path.join(__dirname, '..', 'skills', 'danilov-prompt', 'SKILL.md');
+    const md = fs.readFileSync(f, 'utf8').trim();
+    if (!md) return '';
+    return '\n\n[Vascend] skill `danilov-prompt` CARICATA dall\'hook (applicala ora, non serve il tool Skill):\n' +
+      '----- BEGIN SKILL danilov-prompt -----\n' + md + '\n----- END SKILL danilov-prompt -----';
+  } catch { return ''; }
+}
+
 const INSTRUCTIONS =
-  '[Vascend] Modalita\' Vascend attiva (metodo Danilov). Carica la skill `danilov-prompt` (tool ' +
-  'Skill) e applicala in modalita\' DanilovGoal: INDICE/DEFINIZIONI/RELAZIONI, ' +
+  '[Vascend] Modalita\' Vascend attiva (metodo Danilov). La skill `danilov-prompt` ' +
+  'e\' caricata QUI SOTTO dall\'hook (gia\' attiva, non chiamare il tool Skill): ' +
+  'applicala in modalita\' DanilovGoal: INDICE/DEFINIZIONI/RELAZIONI, ' +
   'bit one-hot. Il goal e\' nello storage di sessione del progetto (gia\' ' +
   'creato): scrivi il piano con `node ' + scriptsPath + '/plan.js`, marca ogni ' +
   'task con `node ' + scriptsPath + '/mark.js <bit> OK` (anteprima `--dry`, ' +
@@ -124,6 +233,9 @@ const INSTRUCTIONS =
   '[--after <slug>]` (illimitati), micro-task ricorsivi con `subplan.js [padre.md] <bit> ...`, ' +
   'verdetto del regno con `validate.js --kingdom`, prossima stanza con `castle.js next`. ' +
   'Marca un task `@compact` nel piano = dopo quello step compatta il contesto. ' +
+  'Abbina skill a un task con `@skill:<slug>[,<slug>]` nella sua descrizione (es. ' +
+  '"T03: estrai PDF @skill:pdf-ocr"): la prossima stanza con skill te le ricorda ' +
+  'l\'hook (card "skill da attivare") e mark.js -> caricale col tool Skill prima di lavorarla. ' +
   'Obiettivo BUSINESS? Regno in fasi: castello analisi -> struttura (--after) -> esecuzione; ' +
   'APPUNTI ricchi per stanza nel dossier `<piano>.notes.md` (Write/Edit liberi, il protect li esenta); ' +
   'board visiva: `castle.js kanban --write` -> VASCEND_KANBAN.md.';
@@ -188,6 +300,14 @@ process.stdin.on('end', () => {
     // Obiettivo one-shot: /vascend <testo> (diverso da on/off).
     const isObjective = !isOff && !isOn && !!slash;
 
+    // INGRESSO via /goal: il comando nativo /goal di Claude Code (fuori dal
+    // plugin) avvia un obiettivo. Lo detectiamo dal prompt grezzo (`/goal ...`,
+    // con eventuale namespace) e lo trattiamo come un ingresso al metodo: alza
+    // sticky vascend + inietta la skill + INSTRUCTIONS (come fa il pattern-comando
+    // di vascend-compact, ma per attivare invece che compattare). NON blocca: il
+    // testo del goal deve raggiungere il modello e il comando /goal deve girare.
+    const isGoalCmd = /^\s*\/goal(?::[a-z-]+)?(?:\s|$)/i.test(prompt);
+
     const TRIGGERS = [
       /\bdanilov\s*goal\b/i,
       /\bdanilovgoal\b/i,
@@ -225,7 +345,7 @@ process.stdin.on('end', () => {
 
     // --- Questo prompt avvia un obiettivo Danilov? ---
     // obiettivo slash, keyword, o QUALSIASI prompt mentre sticky e' attivo.
-    const shouldTrigger = isObjective || isKeyword || (stickyOn && isPlain);
+    const shouldTrigger = isObjective || isKeyword || isGoalCmd || (stickyOn && isPlain);
     if (!shouldTrigger) process.exit(0);
 
     // Alza il flag (enforcement), preservando lo sticky se era attivo. Marca
@@ -233,7 +353,7 @@ process.stdin.on('end', () => {
     // sessione ricevono solo il promemoria breve.
     try {
       fs.mkdirSync(STATE_DIR, { recursive: true });
-      fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: stickyOn, instructed: true, cwd, ts: Date.now() }), 'utf8');
+      fs.writeFileSync(flagFile, JSON.stringify({ active: true, sticky: stickyOn || isGoalCmd, instructed: true, cwd, ts: Date.now() }), 'utf8');
     } catch {}
 
     // Goal skeleton: un nuovo obiettivo resetta; ma un REGNO IN CORSO (almeno
@@ -250,18 +370,31 @@ process.stdin.on('end', () => {
         const k = kingdomVerdict(cwd, sid);
         inProgress = k.exists && !k.conforme; // un castello aperto ovunque nel regno
       } catch {}
-      const wantReset = (isObjective || (stickyOn && isPlain)) && !inProgress;
+      const wantReset = (isObjective || isGoalCmd || (stickyOn && isPlain)) && !inProgress;
       if (wantReset || !fs.existsSync(gf)) writeGoalAtomic(gf, SKELETON);
     } catch {}
 
     // Reiniezione nel loop (C): memorie rilevanti al tema, se ci sono; altrimenti panoramica.
     const memNote = relevantMemories(cwd, prompt) || memorySurface(cwd);
+    // Skill abbinate alla prossima stanza: ricorda di caricarle prima di lavorarla.
+    const skillNote = skillsToActivate(cwd, sid) || '';
+    // Preview context-rot: stima del riempimento + consiglio di suddivisione.
+    const rotNote = rotCard(cwd, sid) || '';
+    // Prefetch file taggati sulla prossima stanza: contenuto gia' in contesto.
+    const fileNote = filesToPrefetch(cwd, sid) || '';
+    // Skill danilov-prompt CARICATA dall'hook (contenuto iniettato), solo la
+    // prima volta della sessione: dopo e' gia' in contesto.
+    const skillContent = wasInstructed ? '' : loadSkillContent();
 
     // /vascend <obiettivo>: il comando slash emette gia' le istruzioni di piano.
-    if (isObjective) { if (memNote) process.stdout.write(memNote.trim()); process.exit(0); }
+    if (isObjective) {
+      const tail = (memNote ? memNote.trim() : '') + skillNote + rotNote + fileNote + skillContent;
+      if (tail) process.stdout.write(tail);
+      process.exit(0);
+    }
 
     // keyword o prompt-sticky: nessun comando slash -> le istruzioni le emette
     // l'hook. Blocco completo solo la prima volta della sessione; poi promemoria.
-    process.stdout.write((wasInstructed ? REMINDER : INSTRUCTIONS) + memNote);
+    process.stdout.write((wasInstructed ? REMINDER : INSTRUCTIONS) + memNote + skillNote + rotNote + fileNote + skillContent);
   } catch {}
 });
